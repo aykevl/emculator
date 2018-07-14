@@ -401,10 +401,10 @@ int machine_step(machine_t *machine, int loglevel) {
 		uint32_t *reg_change = &machine->regs[(instruction >> 0) & 0b111];
 		uint32_t *reg_base   = &machine->regs[(instruction >> 3) & 0b111];
 		uint32_t *reg_offset = &machine->regs[(instruction >> 6) & 0b111];
-		bool     flag_load   = (instruction >> 11) & 0b1;
 		if (((instruction >> 9) & 0b1) == 0) {
 			// Format 7: Load/store with register offset
 			bool flag_byte = (instruction >> 10) & 0b1;
+			bool flag_load = (instruction >> 11) & 0b1;
 			transfer_type_t transfer_type = flag_load ? LOAD : STORE;
 			width_t width = flag_byte ? WIDTH_8 : WIDTH_32;
 			if (machine_transfer(machine, *reg_base + *reg_offset, transfer_type, reg_change, width, false)) {
@@ -413,14 +413,21 @@ int machine_step(machine_t *machine, int loglevel) {
 		} else {
 			// Format 8: Load/store sign-extended byte/halfword
 			bool flag_sign_extend = (instruction >> 10) & 0b1;
+			bool flag_H           = (instruction >> 11) & 0b1;
 			uint32_t address = *reg_base + *reg_offset;
-			transfer_type_t transfer_type = flag_load ? LOAD : STORE;
 			if (flag_sign_extend) {
-				if (machine_transfer(machine, address, transfer_type, reg_change, WIDTH_16, false)) { // LDRH
-					return ERR_OTHER;
+				if (flag_H) {
+					if (machine_transfer(machine, address, LOAD, reg_change, WIDTH_16, true)) { // LDSH
+						return ERR_OTHER;
+					}
+				} else {
+					if (machine_transfer(machine, address, LOAD, reg_change, WIDTH_8, true)) { // LDSB
+						return ERR_OTHER;
+					}
 				}
 			} else {
-				if (machine_transfer(machine, address, transfer_type, reg_change, WIDTH_8, true)) { // LDSB
+				transfer_type_t transfer_type = flag_H ? LOAD : STORE;
+				if (machine_transfer(machine, address, transfer_type, reg_change, WIDTH_16, false)) { // STRH/LDRH
 					return ERR_OTHER;
 				}
 			}
