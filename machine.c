@@ -505,7 +505,10 @@ int machine_step(machine_t *machine, int loglevel) {
 		uint32_t *reg_dst = &machine->regs[(instruction >> 0) & 0b111];
 		uint32_t *reg_src = &machine->regs[(instruction >> 3) & 0b111];
 		uint32_t opcode   = (instruction >> 6) & 0b11;
-		if (opcode == 0b10) {
+		if (opcode == 0b01) {
+			// T1: SXTB (signed extend byte)
+			*reg_dst = (int32_t)(*reg_src << 24) >> 24;
+		} else if (opcode == 0b10) {
 			// T1: UXTH (unsigned extend halfword)
 			*reg_dst = (*reg_src << 16) >> 16;
 		} else if (opcode == 0b11) {
