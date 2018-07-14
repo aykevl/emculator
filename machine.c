@@ -283,18 +283,14 @@ int machine_step(machine_t *machine, int loglevel) {
 			*(int32_t*)reg_dst >>= *reg_src;
 		} else if (op == 0b0101) { // ADCS
 			machine->psr.c = ((uint64_t)*reg_dst + (uint64_t)*reg_src + (uint64_t)old_flags.c) >= (1UL << 32); // true if 32-bit overflow
-			bool sign_dst = (int32_t)*reg_dst < 0;
-			bool sign_src = (int32_t)*reg_src < 0;
 			*reg_dst = *reg_dst + *reg_src + old_flags.c;
-			bool sign_res = (int32_t)*reg_dst < 0;
-			machine->psr.v = ((sign_dst && sign_src) && !sign_res) || ((!sign_dst && !sign_src) && sign_res);
+			int64_t value64 = (uint64_t)*reg_dst + (uint64_t)*reg_src + (uint64_t)old_flags.c;
+			machine->psr.v = *reg_dst != (uint32_t)value64;
 		} else if (op == 0b0110) { // SBCS
-			bool sign_dst = (int32_t)*reg_dst < 0;
-			bool sign_src = (int32_t)*reg_src < 0;
 			*reg_dst = *reg_dst - *reg_src - !old_flags.c;
-			bool sign_res = (int32_t)*reg_dst < 0;
-			machine->psr.c = ((int32_t)*reg_dst) >= 0;
-			machine->psr.v = (!sign_src && sign_dst && !sign_res) || (sign_src && !sign_dst && sign_res);
+			int64_t value64 = (uint64_t)*reg_dst - (uint64_t)*reg_src - (uint64_t)!old_flags.c;
+			machine->psr.c = value64 >= 0;
+			machine->psr.v = *reg_dst != (uint32_t)value64;
 		} else if (op == 0b1000) { // TST
 			// set CC on Rd AND Rs
 			machine->psr.n = (int32_t)(*reg_src & *reg_dst) < 0;
@@ -302,8 +298,9 @@ int machine_step(machine_t *machine, int loglevel) {
 			set_cc = false;
 		} else if (op == 0b1001) { // NEG / RSBS
 			*reg_dst = 0 - *reg_src;
-			machine->psr.c = ((int32_t)*reg_dst) >= 0;
-			machine->psr.v = (int32_t)*reg_src < 0 && (int32_t)*reg_dst < 0;
+			int64_t value64 = (uint64_t)0 - (uint64_t)*reg_src;
+			machine->psr.c = value64 >= 0;
+			machine->psr.v = *reg_dst != (uint32_t)value64;
 		} else if (op == 0b1010) { // CMP
 			// set CC on Rd - Rs
 			int32_t value = *reg_dst - *reg_src;
