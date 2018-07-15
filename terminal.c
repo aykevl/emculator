@@ -41,21 +41,9 @@ static int terminal_getchar_raw() {
 
 int terminal_getchar() {
 	int c = terminal_getchar_raw();
-	//printf(" %02x ", c);
 	return c;
 }
 
 void terminal_putchar(int c) {
-	//if (c == '\r') {
-	//	printf("UART: '\\r'\n");
-	//} else if (c == '\n') {
-	//	printf("UART: '\\n'\n");
-	//} else if (c < 32) {
-	//	printf("UART: ctrl\n");
-	//} else if (c == ' ') {
-	//	printf("UART: <space>\n");
-	//} else {
-	//	printf("UART: '%c'\n", c);
-	//}
 	putchar(c);
 }
