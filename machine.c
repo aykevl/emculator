@@ -26,7 +26,7 @@ static int machine_transfer(machine_t *machine, uint32_t address, transfer_type_
 		// Make this a special case
 		uint32_t value = 0;
 		if ((address & 3) != 0) {
-			printf("\nERROR: invalid peripheral address: 0x%08x\n", address);
+			printf("\nERROR: invalid peripheral address: 0x%08x (PC: %x)\n", address, machine->pc - 3);
 			return ERR_OTHER;
 		}
 		if (transfer_type == STORE && address == 0x40002000) { // STARTRX
@@ -43,6 +43,10 @@ static int machine_transfer(machine_t *machine, uint32_t address, transfer_type_
 			value = terminal_getchar();
 		} else if (transfer_type == STORE && address == 0x4000251c) { // TXD
 			terminal_putchar(*reg);
+		} else if (transfer_type == LOAD && address == 0x4000d100) { // RNG.VALRDY
+			value = 1;
+		} else if (transfer_type == LOAD && address == 0x4000d508) { // RNG.VALUE
+			value = rand() & 0xff;
 		} else {
 			printf("unknown %s peripheral address: 0x%08x (value: 0x%x, PC: %x)\n", transfer_type == LOAD ? "load" : "store", address, *reg, machine->pc - 3);
 		}

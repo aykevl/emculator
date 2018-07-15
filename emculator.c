@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 #include <stdint.h>
 #include <getopt.h>
+#include <string.h>
 
 static void usage(char *argv[]) {
 	fprintf(stderr, "Usage: %s image.bin\n", argv[0]);
@@ -44,9 +45,15 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 
-	size_t image_size = st.st_size & (~0b11UL);
+	size_t image_size = 256 * 1024;
 	uint32_t *image = malloc(image_size);
-	if (fread(image, 1, image_size, fp) != image_size) {
+	memset(image, 0xff, image_size); // erase flash
+
+	if (st.st_size > image_size) {
+		fprintf(stderr, "file too big\n");
+		return 1;
+	}
+	if (fread(image, 1, st.st_size, fp) != st.st_size) {
 		perror("could not read file");
 		return 1;
 	}
