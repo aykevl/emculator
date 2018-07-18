@@ -519,7 +519,10 @@ int machine_step(machine_t *machine) {
 		uint32_t *reg_dst = &machine->regs[(instruction >> 0) & 0b111];
 		uint32_t *reg_src = &machine->regs[(instruction >> 3) & 0b111];
 		uint32_t opcode   = (instruction >> 6) & 0b11;
-		if (opcode == 0b01) {
+		if (opcode == 0b00) {
+			// T1: SXTH (signed extend halfword)
+			*reg_dst = (int32_t)(*reg_src << 16) >> 16;
+		} else if (opcode == 0b01) {
 			// T1: SXTB (signed extend byte)
 			*reg_dst = (int32_t)(*reg_src << 24) >> 24;
 		} else if (opcode == 0b10) {
@@ -528,8 +531,6 @@ int machine_step(machine_t *machine) {
 		} else if (opcode == 0b11) {
 			// T1: UXTB (unsigned extend byte)
 			*reg_dst = (*reg_src << 24) >> 24;
-		} else {
-			return ERR_UNDEFINED;
 		}
 
 	} else if ((instruction >> 8) == 0b10111010) {
