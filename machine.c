@@ -743,6 +743,7 @@ void run_emulator(uint32_t *image, size_t image_size, uint32_t *ram, size_t ram_
 	machine_init(&machine, image, image_size, ram, ram_size);
 	machine_reset(&machine);
 
+	terminal_enable_raw();
 	uint32_t last_sp = 0;
 	while (1) {
 		// Print registers

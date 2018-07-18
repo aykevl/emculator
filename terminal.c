@@ -13,13 +13,16 @@ void terminal_disable_raw() {
 }
 
 void terminal_enable_raw() {
+	// https://viewsourcecode.org/snaptoken/kilo/02.enteringRawMode.html
 	static bool enabled_raw = false;
 	if (enabled_raw) {
 		return; // make enabling idempotent
 	}
 	atexit(terminal_disable_raw);
 	tcgetattr(STDIN_FILENO, &terminal_termios_state);
-	terminal_termios_state.c_lflag &= ~(ECHO | ICANON);
+	terminal_termios_state.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+	terminal_termios_state.c_lflag &= ~(ECHO | ICANON | ISIG);
+	terminal_termios_state.c_lflag &= ~(ECHO);
 	tcsetattr(STDIN_FILENO, TCSAFLUSH, &terminal_termios_state);
 }
 
@@ -32,9 +35,8 @@ static int terminal_getchar_raw() {
 		return c;
 	}
 	int c = getchar(); // TODO: this blocks
-	if (c == '\n') {
-		terminal_buf = '\n';
-		return '\r';
+	if (c == 24) { // Ctrl-X
+		exit(0);
 	}
 	return c;
 }
@@ -45,5 +47,6 @@ int terminal_getchar() {
 }
 
 void terminal_putchar(int c) {
-	putchar(c);
+	// bypass all buffering etc.
+	write(STDOUT_FILENO, &c, 1);
 }
