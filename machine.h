@@ -76,6 +76,9 @@ typedef struct {
 	// indexing.
 	int call_depth;
 	uint32_t backtrace[MACHINE_BACKTRACE_LEN];
+
+	// misc
+	int loglevel;
 } machine_t;
 
 typedef enum {
@@ -96,7 +99,8 @@ enum {
 };
 
 enum {
-	LOG_NONE,     // no logging other than errors
+	LOG_NONE,     // only log critical errors
+	LOG_WARN,     // log warnings
 	LOG_CALLS,    // log all branch/stack related instructions
 	LOG_CALLS_SP, // log calls and registers at stack moves
 	LOG_INSTRS,   // log everything

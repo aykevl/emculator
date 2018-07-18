@@ -10,7 +10,7 @@
 #include <string.h>
 
 static void usage(char *argv[]) {
-	fprintf(stderr, "Usage: %s image.bin\n", argv[0]);
+	fprintf(stderr, "Usage: %s [-v] image.bin\n", argv[0]);
 }
 
 int main(int argc, char *argv[]) {
@@ -22,12 +22,14 @@ int main(int argc, char *argv[]) {
 				loglevel++;
 				break;
 			default:
+				fprintf(stderr, "unknown flag: %c\n", opt);
 				usage(argv);
 				return 1;
 		}
 	}
 
 	if (optind >= argc) {
+		fprintf(stderr, "no image specified\n");
 		usage(argv);
 		return 1;
 	}
