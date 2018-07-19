@@ -183,8 +183,7 @@ int machine_step(machine_t *machine) {
 	// https://ece.uwaterloo.ca/~ece222/ARM/ARM7-TDMI-manual-pt3.pdf
 	// http://hermes.wings.cs.wisc.edu/files/Thumb-2SupplementReferenceManual.pdf
 	if (*pc == 0xdeadbeef) {
-		fprintf(stderr, "exited.\n");
-		return ERR_OTHER;
+		return ERR_EXIT;
 	}
 	if (*pc > machine->image_size - 2) {
 		fprintf(stderr, "\nERROR: PC address is out of range: 0x%08x\n", *pc);
@@ -786,6 +785,9 @@ void run_emulator(uint32_t *image, size_t image_size, uint32_t *ram, size_t ram_
 			case ERR_UNDEFINED:
 				fprintf(stderr, "\nERROR: unknown instruction %04x at address %x\n", machine.image16[machine.pc/2 - 1], machine.pc - 3);
 				break;
+			case ERR_EXIT:
+				fprintf(stderr, "exited.\n");
+				return;
 			case ERR_OTHER:
 				break; // already printed
 			default:

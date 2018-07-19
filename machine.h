@@ -94,6 +94,7 @@ typedef enum {
 
 enum {
 	ERR_OK,        // no error
+	ERR_EXIT,      // program has exited (should not normally happen on a MCU)
 	ERR_OTHER,     // other (already handled) error
 	ERR_UNDEFINED, // undefined instruction
 };
