@@ -209,15 +209,28 @@ int machine_step(machine_t *machine) {
 			// Format 1: move shifted register
 			uint32_t offset5 = (instruction >> 6) & 0x1f;
 			if (op == 0) { // LSLS
-				// TODO: LSLS #0 does not affect carry flag
-				machine->psr.c = *reg_src >> (32 - offset5) & 1;
+				if (offset5 != 0) { // range 0..31
+					machine->psr.c = *reg_src >> (32 - offset5) & 1;
+				}
 				*reg_dst = *reg_src << offset5;
 			} else if (op == 1) { // LSRS
-				machine->psr.c = *reg_src >> (offset5 - 1) & 1;
-				*reg_dst = *reg_src >> offset5;
+				if (offset5 == 0) {
+					machine->psr.c = (*reg_src >> 31) & 1;
+					// shift twice to avoid undefined behavior in the C compiler
+					*reg_dst = (*reg_src >> 31) >> 1;
+				} else {
+					machine->psr.c = *reg_src >> (offset5 - 1) & 1;
+					*reg_dst = *reg_src >> offset5;
+				}
 			} else if (op == 2) { // ASRS
-				machine->psr.c = ((int32_t)*reg_src) >> (offset5 - 1) & 1;
-				*reg_dst = ((int32_t)*reg_src) >> offset5;
+				if (offset5 == 0) { // right shift by 32
+					machine->psr.c = (((int32_t)*reg_src) >> 31) & 1;
+					// shift twice to avoid undefined behavior in the C compiler
+					*reg_dst = (((int32_t)*reg_src) >> 31) >> 1;
+				} else {
+					machine->psr.c = ((int32_t)*reg_src) >> (offset5 - 1) & 1;
+					*reg_dst = ((int32_t)*reg_src) >> offset5;
+				}
 			}
 		} else { // op == 3
 			// Format 2: add/subtract
@@ -228,9 +241,9 @@ int machine_step(machine_t *machine) {
 				value = machine->regs[value];
 			}
 			if (op == 0) { // ADDS
+				machine->psr.c = (uint64_t)*reg_src + (uint64_t)value >= (1UL << 32); // true if 32-bit overflow
 				machine->psr.v = (int32_t)*reg_src >= 0 && (int32_t)(*reg_src + value) < 0;
 				*reg_dst = *reg_src + value;
-				machine->psr.c = (uint64_t)*reg_src + (uint64_t)value >= (1UL << 32); // true if 32-bit overflow
 			} else { // SUBS
 				machine->psr.c = (int64_t)((uint64_t)*reg_src - (uint64_t)value) >= 0;
 				machine->psr.v = (int32_t)*reg_src < 0 && (int32_t)(*reg_src - value) >= 0;
@@ -287,13 +300,19 @@ int machine_step(machine_t *machine) {
 		} else if (op == 0b0001) { // EORS
 			*reg_dst ^= *reg_src;
 		} else if (op == 0b0010) { // LSLS
-			machine->psr.c = *reg_dst >> (32 - *reg_src) & 1;
+			if (*reg_src != 0) {
+				machine->psr.c = *reg_dst >> (32 - *reg_src) & 1;
+			}
 			*reg_dst <<= *reg_src;
 		} else if (op == 0b0011) { // LSRS
-			machine->psr.c = *reg_dst >> (*reg_src - 1) & 1;
+			if (*reg_src != 0) {
+				machine->psr.c = *reg_dst >> (*reg_src - 1) & 1;
+			}
 			*reg_dst >>= *reg_src;
 		} else if (op == 0b0100) { // ASRS
-			machine->psr.c = ((int32_t)*reg_dst) >> (*reg_src - 1) & 1;
+			if (*reg_src != 0) {
+				machine->psr.c = ((int32_t)*reg_dst) >> (*reg_src - 1) & 1;
+			}
 			*(int32_t*)reg_dst >>= *reg_src;
 		} else if (op == 0b0101) { // ADCS
 			machine->psr.c = ((uint64_t)*reg_dst + (uint64_t)*reg_src + (uint64_t)old_flags.c) >= (1UL << 32); // true if 32-bit overflow
@@ -382,6 +401,7 @@ int machine_step(machine_t *machine) {
 			if (op == 0) { // ADD
 				*reg_dst += *reg_src;
 			} else if (op == 1) { // CMP
+				// set CC on Rd - Rs
 				int32_t value = *reg_dst - *reg_src;
 				int64_t value64 = (uint64_t)*reg_dst - (uint64_t)*reg_src;
 				machine->psr.c = value64 >= 0;
@@ -710,9 +730,6 @@ int machine_step(machine_t *machine) {
 		// Set LR to PC + SignExtend(imm11 : '000000000000')
 		uint32_t imm11 = (instruction >> 0) & 0x7ff;
 		*lr = ((int32_t)(imm11 << 21)) >> 9; // leave the lowest 12 bits zero
-		if (machine->loglevel >= LOG_CALLS) {
-			fprintf(stderr, "%*sbl prep\n", machine->call_depth * 2, "");
-		}
 
 	} else if ((instruction >> 11) == 0b11111) {
 		// Part 2 of 32-bit Thumb-2 instruction: BL
