@@ -756,8 +756,8 @@ void run_emulator(uint32_t *image, size_t image_size, uint32_t *ram, size_t ram_
 	}
 
 	machine_t machine;
-	machine.loglevel = loglevel;
 	machine_init(&machine, image, image_size, ram, ram_size);
+	machine.loglevel = loglevel;
 	machine_reset(&machine);
 
 	terminal_enable_raw();
