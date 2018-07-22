@@ -61,7 +61,7 @@ int main(int argc, char *argv[]) {
 	}
 	fclose(fp);
 
-	size_t ram_size = 16 * 1024; // 16kB of RAM
+	size_t ram_size = 32 * 1024; // 32kB of RAM
 	uint32_t *ram = calloc(ram_size, 1);
 	size_t pagesize = 1024;
 
