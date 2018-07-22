@@ -745,6 +745,9 @@ int machine_step(machine_t *machine) {
 			*lr = *pc;
 			*pc = new_pc;
 
+		} else if ((hw1 >> 4) == 0b111100111011 || (hw2 >> 14) == 0b10) {
+			// Special control operations, ignore.
+
 		} else {
 			*pc -= 2; // undo 32-bit change
 			return ERR_UNDEFINED;
