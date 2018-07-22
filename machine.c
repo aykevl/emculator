@@ -598,8 +598,13 @@ int machine_step(machine_t *machine) {
 	} else if ((instruction >> 8) == 0b10111110) {
 		// T1: BKPT (software breakpoint)
 		uint32_t imm8 = (instruction >> 0) & 0b11111111;
-		fprintf(stderr, "Execution has hit breakpoint %d at PC=%x.\n", imm8, machine->pc - 3);
-		return ERR_OTHER;
+		// This emulator handles some breakpoints in a special way.
+		if (imm8 == 0x81) {
+			machine->loglevel = LOG_INSTRS;
+		} else {
+			fprintf(stderr, "Execution has hit breakpoint %d at PC=%x.\n", imm8, machine->pc - 3);
+			return ERR_OTHER;
+		}
 
 	} else if ((instruction >> 12) == 0b1011 && ((instruction >> 9) & 0b11) == 0b10) { // 1011x10
 		// Format 14: push/pop registers
@@ -786,6 +791,18 @@ int machine_step(machine_t *machine) {
 	return 0;
 }
 
+void machine_print_registers(machine_t *machine) {
+	fprintf(stderr, "\n[ ");
+	for (size_t i=0; i<8; i++) {
+		fprintf(stderr, "%8x ", machine->regs[i]);
+	}
+	fprintf(stderr, ".. %8x ", machine->sp);     // sp
+	fprintf(stderr, "%8x ",    machine->lr - 1); // lr, not entirely correct
+	fprintf(stderr, "%8x ",    machine->pc - 1); // pc, not entirely correct
+	fprintf(stderr, "%c%c%c%c ", machine->psr.n ? 'N' : '_', machine->psr.z ? 'Z' : '_', machine->psr.c ? 'C' : '_', machine->psr.v ? 'V' : '_');
+	fprintf(stderr, "]\n");
+}
+
 void run_emulator(uint32_t *image, size_t image_size, size_t pagesize, uint32_t *ram, size_t ram_size, int loglevel) {
 	if (image_size < 16 * 4) {
 		fprintf(stderr, "\nERROR: image is too small to contain an executable\n");
@@ -803,15 +820,7 @@ void run_emulator(uint32_t *image, size_t image_size, size_t pagesize, uint32_t 
 		// Print registers
 		if (machine.loglevel >= LOG_INSTRS || (machine.loglevel >= LOG_CALLS_SP && machine.sp != last_sp)) {
 			last_sp = machine.sp;
-			fprintf(stderr, "\n[ ");
-			for (size_t i=0; i<8; i++) {
-				fprintf(stderr, "%8x ", machine.regs[i]);
-			}
-			fprintf(stderr, ".. %8x ", machine.sp);     // sp
-			fprintf(stderr, "%8x ",    machine.lr - 1); // lr, not entirely correct
-			fprintf(stderr, "%8x ",    machine.pc - 1); // pc, not entirely correct
-			fprintf(stderr, "%c%c%c%c ", machine.psr.n ? 'N' : '_', machine.psr.z ? 'Z' : '_', machine.psr.c ? 'C' : '_', machine.psr.v ? 'V' : '_');
-			fprintf(stderr, "]\n");
+			machine_print_registers(&machine);
 		}
 
 		// Execute a single instruction
@@ -832,6 +841,7 @@ void run_emulator(uint32_t *image, size_t image_size, size_t pagesize, uint32_t 
 				break;
 		}
 		if (err != 0) {
+			machine_print_registers(&machine);
 			machine_add_backtrace(&machine, machine.pc);
 			fprintf(stderr, "Backtrace:\n");
 			for (int i = 1; i < machine.call_depth; i++) {
