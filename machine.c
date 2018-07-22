@@ -724,23 +724,31 @@ int machine_step(machine_t *machine) {
 			fprintf(stderr, "%*sB    %7x (sp: %x) -> %x\n", machine->call_depth * 2, "", old_pc - 3, *sp, *pc - 1);
 		}
 
-	} else if ((instruction >> 11) == 0b11110) {
-		// Part 1 of 32-bit Thumb-2 instruction: BL
-		// Set LR to PC + SignExtend(imm11 : '000000000000')
-		uint32_t imm11 = (instruction >> 0) & 0x7ff;
-		*lr = ((int32_t)(imm11 << 21)) >> 9; // leave the lowest 12 bits zero
+	} else if ((instruction >> 12) == 0b1111) {
+		// 32-bit instruction
 
-	} else if ((instruction >> 11) == 0b11111) {
-		// Part 2 of 32-bit Thumb-2 instruction: BL
-		// Complete operation.
-		uint32_t imm11 = (instruction >> 0) & 0x7ff;
-		uint32_t old_pc = *pc;
-		*pc += *lr + (imm11 << 1);
-		*lr = old_pc;
-		if (machine->loglevel >= LOG_CALLS) {
-			fprintf(stderr, "%*sBL   %7x (sp: %x) -> %x\n", machine->call_depth * 2, "", old_pc - 5, *sp, *pc - 1);
+		uint16_t hw1 = instruction;
+		uint16_t hw2 = machine->image16[*pc/2];
+		*pc += 2;
+		if ((hw1 >> 11) == 0b11110 && (hw2 >> 11) == 0b11111) {
+			// BL
+			uint32_t imm10 = hw1 & 0x3ff;
+			uint32_t imm11 = hw2 & 0x7ff;
+			int32_t pc_offset = (int32_t)(((uint32_t)imm10 << 12) | ((uint32_t)imm11 << 1)); // >> 11;
+			pc_offset <<= 10;
+			pc_offset >>= 10;
+			uint32_t new_pc = (int32_t)*pc + pc_offset;
+			if (machine->loglevel >= LOG_CALLS) {
+				fprintf(stderr, "%*sBL   %7x (sp: %x) -> %x\n", machine->call_depth * 2, "", *pc, *sp, new_pc - 1);
+			}
+			machine_add_backtrace(machine, *pc - 5);
+			*lr = *pc;
+			*pc = new_pc;
+
+		} else {
+			*pc -= 2; // undo 32-bit change
+			return ERR_UNDEFINED;
 		}
-		machine_add_backtrace(machine, old_pc - 5);
 
 	} else {
 		return ERR_UNDEFINED;
