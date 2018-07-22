@@ -16,6 +16,20 @@ static int machine_transfer(machine_t *machine, uint32_t address, transfer_type_
 		if (region_address < machine->image_size) {
 			ptr = &machine->image8[region_address];
 		}
+		if (transfer_type == STORE) {
+			if ((address & 3) != 0 || width != WIDTH_32) {
+				fprintf(stderr, "ERROR: unaligned write to read-only memory (PC: %x)\n", machine->pc - 3);
+				return ERR_OTHER;
+			}
+			if (!machine->image_writable) {
+				fprintf(stderr, "ERROR: write to read-only memory (PC: %x)\n", machine->pc - 3);
+				return ERR_OTHER;
+			}
+
+			// Emulate NOR memory where bits can only be cleared.
+			*(uint32_t*)ptr &= *reg;
+			return 0;
+		}
 	} else if (region == 1) {
 		// SRAM: 0x20000000 .. 0x3ffffff
 		if (region_address < machine->mem_size) {
@@ -25,8 +39,8 @@ static int machine_transfer(machine_t *machine, uint32_t address, transfer_type_
 		// Peripherals: 0x40000000 .. 0x5fffffff
 		// Make this a special case
 		uint32_t value = 0;
-		if ((address & 3) != 0) {
-			fprintf(stderr, "\nERROR: invalid peripheral address: 0x%08x (PC: %x)\n", address, machine->pc - 3);
+		if ((address & 3) != 0 || width != WIDTH_32) {
+			fprintf(stderr, "\nERROR: invalid %s peripheral address: 0x%08x (PC: %x)\n", transfer_type == LOAD ? "load" : "store", address, machine->pc - 3);
 			return ERR_OTHER;
 		}
 		if (transfer_type == STORE && address == 0x40002000) { // STARTRX
@@ -47,6 +61,17 @@ static int machine_transfer(machine_t *machine, uint32_t address, transfer_type_
 			value = 1;
 		} else if (transfer_type == LOAD && address == 0x4000d508) { // RNG.VALUE
 			value = rand() & 0xff;
+		} else if (transfer_type == LOAD && address == 0x4001e400) { // NVMC.READY
+			value = 1; // always ready
+		} else if (transfer_type == STORE && address == 0x4001e504) { // NVMC.CONFIG
+			machine->image_writable = *reg != 0;
+		} else if (transfer_type == STORE && address == 0x4001e508) { // NVMC.ERASEPAGE
+			if ((*reg & (machine->pagesize-1)) != 0 || *reg >= machine->image_size) {
+				fprintf(stderr, "ERROR: invalid page address: %x (PC: %x)\n", *reg, machine->pc - 3);
+				return ERR_OTHER;
+			}
+			// Emulate erasing NOR flash.
+			memset(machine->image8 + *reg, 0xff, machine->pagesize);
 		} else {
 			if (machine->loglevel >= LOG_WARN) {
 				fprintf(stderr, "unknown %s peripheral address: 0x%08x (value: 0x%x, PC: %x)\n", transfer_type == LOAD ? "load" : "store", address, *reg, machine->pc - 3);
@@ -140,13 +165,14 @@ static int machine_transfer(machine_t *machine, uint32_t address, transfer_type_
 	return 0;
 }
 
-void machine_init(machine_t *machine, uint32_t *image, size_t image_size, uint32_t *ram, size_t ram_size) {
+void machine_init(machine_t *machine, uint32_t *image, size_t image_size, size_t pagesize, uint32_t *ram, size_t ram_size) {
 	// TODO: put random data in here to make a better simulation
 	memset(machine, 0, sizeof(*machine));
 	machine->image32 = image;
 	machine->image_size = image_size;
 	machine->mem32 = ram;
 	machine->mem_size = ram_size;
+	machine->pagesize = pagesize;
 	machine->call_depth = 1;
 }
 
@@ -760,14 +786,14 @@ int machine_step(machine_t *machine) {
 	return 0;
 }
 
-void run_emulator(uint32_t *image, size_t image_size, uint32_t *ram, size_t ram_size, int loglevel) {
+void run_emulator(uint32_t *image, size_t image_size, size_t pagesize, uint32_t *ram, size_t ram_size, int loglevel) {
 	if (image_size < 16 * 4) {
 		fprintf(stderr, "\nERROR: image is too small to contain an executable\n");
 		return;
 	}
 
 	machine_t machine;
-	machine_init(&machine, image, image_size, ram, ram_size);
+	machine_init(&machine, image, image_size, pagesize, ram, ram_size);
 	machine.loglevel = loglevel;
 	machine_reset(&machine);
 

@@ -63,8 +63,9 @@ int main(int argc, char *argv[]) {
 
 	size_t ram_size = 16 * 1024; // 16kB of RAM
 	uint32_t *ram = calloc(ram_size, 1);
+	size_t pagesize = 1024;
 
-	run_emulator(image, image_size, ram, ram_size, loglevel);
+	run_emulator(image, image_size, pagesize, ram, ram_size, loglevel);
 	free(image);
 	free(ram);
 }

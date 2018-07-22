@@ -57,6 +57,8 @@ typedef struct {
 		uint8_t  *image8;
 	};
 	size_t image_size;
+	bool image_writable;
+	size_t pagesize;
 
 	// RAM area
 	union {
@@ -107,4 +109,4 @@ enum {
 	LOG_INSTRS,   // log everything
 };
 
-void run_emulator(uint32_t *image, size_t image_size, uint32_t *ram, size_t ram_size, int loglevel);
+void run_emulator(uint32_t *image, size_t image_size, size_t pagesize, uint32_t *ram, size_t ram_size, int loglevel);
