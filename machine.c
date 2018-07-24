@@ -242,7 +242,7 @@ int machine_step(machine_t *machine) {
 				if (offset5 == 0) {
 					machine->psr.c = (*reg_src >> 31) & 1;
 					// shift twice to avoid undefined behavior in the C compiler
-					*reg_dst = (*reg_src >> 31) >> 1;
+					*reg_dst = 0;
 				} else {
 					machine->psr.c = *reg_src >> (offset5 - 1) & 1;
 					*reg_dst = *reg_src >> offset5;
@@ -330,15 +330,23 @@ int machine_step(machine_t *machine) {
 			}
 			*reg_dst <<= *reg_src;
 		} else if (op == 0b0011) { // LSRS
-			if (*reg_src != 0) {
-				machine->psr.c = *reg_dst >> (*reg_src - 1) & 1;
+			uint8_t shiftlen = *reg_src & 0xff;
+			if (shiftlen >= 32) {
+				machine->psr.c = (*reg_dst >> 31) & 1;
+				*reg_dst = 0;
+			} else if (shiftlen > 0) { // 1..31
+				machine->psr.c = *reg_dst >> (shiftlen - 1) & 1;
+				*reg_dst >>= shiftlen;
 			}
-			*reg_dst >>= *reg_src;
 		} else if (op == 0b0100) { // ASRS
-			if (*reg_src != 0) {
-				machine->psr.c = ((int32_t)*reg_dst) >> (*reg_src - 1) & 1;
+			uint8_t shiftlen = *reg_src & 0xff;
+			if (shiftlen >= 32) {
+				*(int32_t*)reg_dst = ((*(int32_t*)reg_dst) >> 16) >> 16;
+				machine->psr.c = (((int32_t)*reg_dst) >> 31) & 1;
+			} else if (shiftlen > 0) { // 1..31
+				*(int32_t*)reg_dst >>= shiftlen;
+				machine->psr.c = (((int32_t)*reg_dst) >> (shiftlen - 1)) & 1;
 			}
-			*(int32_t*)reg_dst >>= *reg_src;
 		} else if (op == 0b0101) { // ADCS
 			machine->psr.c = ((uint64_t)*reg_dst + (uint64_t)*reg_src + (uint64_t)old_flags.c) >= (1UL << 32); // true if 32-bit overflow
 			*reg_dst = *reg_dst + *reg_src + old_flags.c;
