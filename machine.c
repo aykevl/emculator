@@ -580,10 +580,10 @@ int machine_step(machine_t *machine) {
 			*reg_dst = (int32_t)(*reg_src << 24) >> 24;
 		} else if (opcode == 0b10) {
 			// T1: UXTH (unsigned extend halfword)
-			*reg_dst = (*reg_src << 16) >> 16;
+			*reg_dst = *reg_src & 0xffff;
 		} else if (opcode == 0b11) {
 			// T1: UXTB (unsigned extend byte)
-			*reg_dst = (*reg_src << 24) >> 24;
+			*reg_dst = *reg_src & 0xff;
 		}
 
 	} else if ((instruction >> 8) == 0b10111010) {
