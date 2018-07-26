@@ -1,6 +1,5 @@
 
-CC=clang
-CFLAGS=-Wall -Werror -O2 -std=c11
+CFLAGS=-Wall -Werror -O2 -std=c11 -DEMCULATOR_MAIN=1
 LDFLAGS=$(CFLAGS)
 
 .PHONY: all clean

@@ -165,17 +165,6 @@ static int machine_transfer(machine_t *machine, uint32_t address, transfer_type_
 	return 0;
 }
 
-void machine_init(machine_t *machine, uint32_t *image, size_t image_size, size_t pagesize, uint32_t *ram, size_t ram_size) {
-	// TODO: put random data in here to make a better simulation
-	memset(machine, 0, sizeof(*machine));
-	machine->image32 = image;
-	machine->image_size = image_size;
-	machine->mem32 = ram;
-	machine->mem_size = ram_size;
-	machine->pagesize = pagesize;
-	machine->call_depth = 1;
-}
-
 void machine_reset(machine_t *machine) {
 	// Do a reset
 	machine->sp = machine->image32[0]; // initial stack pointer
@@ -811,33 +800,61 @@ void machine_print_registers(machine_t *machine) {
 	fprintf(stderr, "]\n");
 }
 
-void run_emulator(uint32_t *image, size_t image_size, size_t pagesize, uint32_t *ram, size_t ram_size, int loglevel) {
+machine_t * machine_create(size_t image_size, size_t pagesize, size_t ram_size, int loglevel) {
 	if (image_size < 16 * 4) {
 		fprintf(stderr, "\nERROR: image is too small to contain an executable\n");
-		return;
+		return NULL;
 	}
 
-	machine_t machine;
-	machine_init(&machine, image, image_size, pagesize, ram, ram_size);
-	machine.loglevel = loglevel;
-	machine_reset(&machine);
+	machine_t *machine = calloc(sizeof(machine_t), 1);
+	machine->pagesize = pagesize;
+	machine->call_depth = 1;
+	machine->loglevel = loglevel;
+	machine->image_size = image_size;
+	machine->mem_size = ram_size;
 
-	terminal_enable_raw();
-	uint32_t last_sp = 0;
+	uint32_t *image = malloc(image_size);
+	memset(image, 0xff, image_size); // erase flash
+	machine->image32 = image;
+
+	// TODO: put random data in here to make a better simulation
+	uint32_t *ram = calloc(ram_size, 1);
+	machine->mem32 = ram;
+
+	return machine;
+}
+
+void machine_load(machine_t *machine, uint8_t *image, size_t image_size) {
+	// caller should check this, but at least fail in a reasonable way
+	if (image_size > machine->image_size) {
+		image_size = machine->image_size;
+	}
+	memcpy(machine->image8, image, image_size);
+}
+
+void machine_free(machine_t *machine) {
+	free(machine->image);
+	machine->image = NULL;
+	free(machine->mem);
+	machine->mem = NULL;
+	free(machine);
+}
+
+void machine_run(machine_t *machine) {
 	while (1) {
 		// Print registers
-		if (machine.loglevel >= LOG_INSTRS || (machine.loglevel >= LOG_CALLS_SP && machine.sp != last_sp)) {
-			last_sp = machine.sp;
-			machine_print_registers(&machine);
+		if (machine->loglevel >= LOG_INSTRS || (machine->loglevel >= LOG_CALLS_SP && machine->sp != machine->last_sp)) {
+			machine->last_sp = machine->sp;
+			machine_print_registers(machine);
 		}
 
 		// Execute a single instruction
-		int err = machine_step(&machine);
+		int err = machine_step(machine);
 		switch (err) {
 			case 0:
 				break; // no error
 			case ERR_UNDEFINED:
-				fprintf(stderr, "\nERROR: unknown instruction %04x at address %x\n", machine.image16[machine.pc/2 - 1], machine.pc - 3);
+				fprintf(stderr, "\nERROR: unknown instruction %04x at address %x\n", machine->image16[machine->pc/2 - 1], machine->pc - 3);
 				break;
 			case ERR_EXIT:
 				fprintf(stderr, "exited.\n");
@@ -849,15 +866,15 @@ void run_emulator(uint32_t *image, size_t image_size, size_t pagesize, uint32_t 
 				break;
 		}
 		if (err != 0) {
-			machine_print_registers(&machine);
-			machine_add_backtrace(&machine, machine.pc);
+			machine_print_registers(machine);
+			machine_add_backtrace(machine, machine->pc);
 			fprintf(stderr, "Backtrace:\n");
-			for (int i = 1; i < machine.call_depth; i++) {
+			for (int i = 1; i < machine->call_depth; i++) {
 				if (i >= MACHINE_BACKTRACE_LEN) {
 					fprintf(stderr, " %3d. (too much recursion)\n", i);
 					break;
 				}
-				fprintf(stderr, " %3d. %8x\n", i, machine.backtrace[i]);
+				fprintf(stderr, " %3d. %8x\n", i, machine->backtrace[i]);
 			}
 			return;
 		}

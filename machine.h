@@ -55,6 +55,7 @@ typedef struct {
 		uint32_t *image32;
 		uint16_t *image16;
 		uint8_t  *image8;
+		void     *image;
 	};
 	size_t image_size;
 	bool image_writable;
@@ -65,6 +66,7 @@ typedef struct {
 		uint32_t *mem32;
 		uint16_t *mem16;
 		uint8_t  *mem8;
+		void     *mem;
 	};
 	size_t mem_size;
 
@@ -78,6 +80,7 @@ typedef struct {
 	// indexing.
 	int call_depth;
 	uint32_t backtrace[MACHINE_BACKTRACE_LEN];
+	uint32_t last_sp;
 
 	// misc
 	int loglevel;
@@ -102,11 +105,15 @@ enum {
 };
 
 enum {
-	LOG_NONE,     // only log critical errors
+	LOG_ERROR,    // only log critical errors
 	LOG_WARN,     // log warnings
 	LOG_CALLS,    // log all branch/stack related instructions
 	LOG_CALLS_SP, // log calls and registers at stack moves
 	LOG_INSTRS,   // log everything
 };
 
-void run_emulator(uint32_t *image, size_t image_size, size_t pagesize, uint32_t *ram, size_t ram_size, int loglevel);
+machine_t * machine_create(size_t image_size, size_t pagesize, size_t ram_size, int loglevel);
+void machine_load(machine_t *machine, uint8_t *image, size_t image_size);
+void machine_reset(machine_t *machine);
+void machine_run(machine_t *machine);
+void machine_free(machine_t *machine);

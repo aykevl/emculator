@@ -1,4 +1,9 @@
 
+// This file contains the main() function, which is a small wrapper around
+// the machine_* calls.
+
+#ifdef EMCULATOR_MAIN
+
 #define _POSIX_C_SOURCE 1
 
 #include "machine.h"
@@ -48,24 +53,26 @@ int main(int argc, char *argv[]) {
 	}
 
 	size_t image_size = 256 * 1024;
-	uint32_t *image = malloc(image_size);
-	memset(image, 0xff, image_size); // erase flash
+	size_t pagesize = 1024;
+	size_t ram_size = 32 * 1024; // 32kB of RAM
 
 	if (st.st_size > image_size) {
 		fprintf(stderr, "file too big\n");
 		return 1;
 	}
+	uint8_t *image = malloc(st.st_size);
 	if (fread(image, 1, st.st_size, fp) != st.st_size) {
 		perror("could not read file");
 		return 1;
 	}
 	fclose(fp);
 
-	size_t ram_size = 32 * 1024; // 32kB of RAM
-	uint32_t *ram = calloc(ram_size, 1);
-	size_t pagesize = 1024;
-
-	run_emulator(image, image_size, pagesize, ram, ram_size, loglevel);
-	free(image);
-	free(ram);
+	machine_t *machine = machine_create(image_size, pagesize, ram_size, loglevel);
+	machine_load(machine, image, st.st_size);
+	machine_reset(machine);
+	machine_run(machine);
+	machine_free(machine);
+	return 0;
 }
+
+#endif // EMCULATOR_MAIN

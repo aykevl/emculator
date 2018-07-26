@@ -5,6 +5,8 @@
 #include <unistd.h>
 #include <stdbool.h>
 
+// This file handles raw terminal input and output.
+
 static int terminal_buf = -1;
 static struct termios terminal_termios_state;
 
