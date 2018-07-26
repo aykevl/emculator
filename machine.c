@@ -536,11 +536,10 @@ int machine_step(machine_t *machine) {
 		uint32_t word8    = (instruction >> 0) & 0xff; // 8 bits
 		uint32_t *reg_dst = &machine->regs[(instruction >> 8) & 0b111];
 		bool     flag_sp  = (instruction >> 11) & 0b1;
-		uint32_t *reg_src = flag_sp ? sp : pc;
-		uint32_t value = *reg_src;
+		uint32_t value = flag_sp ? *sp : *pc;
 		if (!flag_sp) {
-			// for PC: force bit 1 to 0, add PC offset
-			value &= ~0b10UL + 4;
+			// for PC: force bit 1 to 0
+			value &= ~0b11UL;
 		}
 		*reg_dst = value + (word8 << 2);
 
