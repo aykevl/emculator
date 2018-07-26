@@ -188,6 +188,50 @@ static void machine_sub_backtrace(machine_t *machine) {
 	machine->call_depth--;
 }
 
+static uint32_t machine_instr_adds(machine_t *machine, uint32_t a, uint32_t b) {
+	uint32_t result = a + b;
+	int64_t result64s = (int64_t)(int32_t)a + (int64_t)(int32_t)b;
+	uint64_t result64u = (uint64_t)a + (uint64_t)b;
+	machine->psr.n = (int32_t)result < 0;
+	machine->psr.z = result == 0;
+	machine->psr.c = result64u >= (1UL << 32); // true if 32-bit overflow
+	machine->psr.v = ((int32_t)result < 0) != (result64s < 0);
+	return result;
+}
+
+static uint32_t machine_instr_adcs(machine_t *machine, uint32_t a, uint32_t b) {
+	uint32_t result = a + b + machine->psr.c;
+	int64_t result64s = (int64_t)(int32_t)a + (int64_t)(int32_t)b + machine->psr.c;
+	uint64_t result64u = (uint64_t)a + (uint64_t)b + machine->psr.c;
+	machine->psr.n = (int32_t)result < 0;
+	machine->psr.z = result == 0;
+	machine->psr.c = result64u >= (1UL << 32); // true if 32-bit overflow
+	machine->psr.v = ((int32_t)result < 0) != (result64s < 0);
+	return result;
+}
+
+static uint32_t machine_instr_subs(machine_t *machine, uint32_t a, uint32_t b) {
+	uint32_t result = a - b;
+	int64_t result64s = (int64_t)(int32_t)a - (int64_t)(int32_t)b;
+	uint64_t result64u = (uint64_t)a - (uint64_t)b;
+	machine->psr.n = (int32_t)result < 0;
+	machine->psr.z = result == 0;
+	machine->psr.c = (int64_t)result64u >= 0;
+	machine->psr.v = ((int32_t)result < 0) != (result64s < 0);
+	return result;
+}
+
+static uint32_t machine_instr_sbcs(machine_t *machine, uint32_t a, uint32_t b) {
+	uint32_t result = a - b - !machine->psr.c;
+	int64_t result64s = (int64_t)(int32_t)a - (int64_t)(int32_t)b - !machine->psr.c;
+	int64_t result64u = (uint64_t)a - (uint64_t)b - !machine->psr.c;
+	machine->psr.n = (int32_t)result < 0;
+	machine->psr.z = result == 0;
+	machine->psr.c = (int64_t)result64u >= 0;
+	machine->psr.v = ((int32_t)result < 0) != (result64s < 0);
+	return result;
+}
+
 int machine_step(machine_t *machine) {
 	// Some handy aliases
 	uint32_t *pc = &machine->pc; // r15
@@ -197,6 +241,7 @@ int machine_step(machine_t *machine) {
 	// Run instruction
 	// https://ece.uwaterloo.ca/~ece222/ARM/ARM7-TDMI-manual-pt3.pdf
 	// http://hermes.wings.cs.wisc.edu/files/Thumb-2SupplementReferenceManual.pdf
+	// https://www.heyrick.co.uk/armwiki/The_Status_register
 	if (*pc == 0xdeadbeef) {
 		return ERR_EXIT;
 	}
@@ -255,13 +300,9 @@ int machine_step(machine_t *machine) {
 				value = machine->regs[value];
 			}
 			if (op == 0) { // ADDS
-				machine->psr.c = (uint64_t)*reg_src + (uint64_t)value >= (1UL << 32); // true if 32-bit overflow
-				machine->psr.v = (int32_t)*reg_src >= 0 && (int32_t)(*reg_src + value) < 0;
-				*reg_dst = *reg_src + value;
+				*reg_dst = machine_instr_adds(machine, *reg_src, value);
 			} else { // SUBS
-				machine->psr.c = (int64_t)((uint64_t)*reg_src - (uint64_t)value) >= 0;
-				machine->psr.v = (int32_t)*reg_src < 0 && (int32_t)(*reg_src - value) >= 0;
-				*reg_dst = *reg_src - value;
+				*reg_dst = machine_instr_subs(machine, *reg_src, value);
 			}
 		}
 		machine->psr.n = (int32_t)*reg_dst < 0;
@@ -277,25 +318,13 @@ int machine_step(machine_t *machine) {
 			*reg = imm;
 		} else if (op == 1) { // CMP
 			// Update flags as if doing *reg - imm
-			int32_t value = *reg - imm;
-			int64_t value64 = (uint64_t)*reg - (uint64_t)imm;
-			machine->psr.c = value64 >= 0;
-			machine->psr.n = value < 0;
-			machine->psr.z = value == 0;
-			machine->psr.v = value != (uint32_t)value64;
-			if (machine->loglevel >= LOG_INSTRS) {
-				fprintf(stderr, "CMP %x - %x -> V=%d (PC: %x)\n", *reg, imm, (int)machine->psr.v, *pc - 3);
-			}
+			machine_instr_subs(machine, *reg, imm);
 			set_cc = false;
 			// Don't update *reg
 		} else if (op == 2) { // ADDS
-			machine->psr.c = (uint64_t)*reg + (uint64_t)imm >= (1UL << 32); // true if 32-bit overflow
-			machine->psr.v = (int32_t)*reg >= 0 && (int32_t)(*reg + imm) < 0;
-			*reg += imm;
+			*reg = machine_instr_adds(machine, *reg, imm);
 		} else if (op == 3) { // SUBS
-			machine->psr.c = (int64_t)((uint64_t)*reg - (uint64_t)imm) >= 0;
-			machine->psr.v = (int32_t)*reg < 0 && (int32_t)(*reg - imm) >= 0;
-			*reg -= imm;
+			*reg = machine_instr_subs(machine, *reg, imm);
 		}
 		if (set_cc) {
 			machine->psr.n = (int32_t)*reg < 0;
@@ -307,7 +336,6 @@ int machine_step(machine_t *machine) {
 		uint32_t *reg_dst = &machine->regs[(instruction >> 0) & 0b111];
 		uint32_t *reg_src = &machine->regs[(instruction >> 3) & 0b111];
 		uint32_t op       = (instruction >> 6) & 0b1111;
-		flags_t old_flags = machine->psr;
 		bool set_cc = true;
 		if (op == 0b0000) { // ANDS
 			*reg_dst &= *reg_src;
@@ -337,36 +365,19 @@ int machine_step(machine_t *machine) {
 				machine->psr.c = (((int32_t)*reg_dst) >> (shiftlen - 1)) & 1;
 			}
 		} else if (op == 0b0101) { // ADCS
-			machine->psr.c = ((uint64_t)*reg_dst + (uint64_t)*reg_src + (uint64_t)old_flags.c) >= (1UL << 32); // true if 32-bit overflow
-			*reg_dst = *reg_dst + *reg_src + old_flags.c;
-			int64_t value64 = (uint64_t)*reg_dst + (uint64_t)*reg_src + (uint64_t)old_flags.c;
-			machine->psr.v = *reg_dst != (uint32_t)value64;
+			*reg_dst = machine_instr_adcs(machine, *reg_dst, *reg_src);
 		} else if (op == 0b0110) { // SBCS
-			*reg_dst = *reg_dst - *reg_src - !old_flags.c;
-			int64_t value64 = (uint64_t)*reg_dst - (uint64_t)*reg_src - (uint64_t)!old_flags.c;
-			machine->psr.c = value64 >= 0;
-			machine->psr.v = *reg_dst != (uint32_t)value64;
+			*reg_dst = machine_instr_sbcs(machine, *reg_dst, *reg_src);
 		} else if (op == 0b1000) { // TST
 			// set CC on Rd AND Rs
 			machine->psr.n = (int32_t)(*reg_src & *reg_dst) < 0;
 			machine->psr.z = (int32_t)(*reg_src & *reg_dst) == 0;
 			set_cc = false;
 		} else if (op == 0b1001) { // NEG / RSBS
-			*reg_dst = 0 - *reg_src;
-			int64_t value64 = (uint64_t)0 - (uint64_t)*reg_src;
-			machine->psr.c = value64 >= 0;
-			machine->psr.v = *reg_dst != (uint32_t)value64;
+			*reg_dst = machine_instr_subs(machine, 0, *reg_src);
 		} else if (op == 0b1010) { // CMP
 			// set CC on Rd - Rs
-			int32_t value = *reg_dst - *reg_src;
-			int64_t value64 = (uint64_t)*reg_dst - (uint64_t)*reg_src;
-			machine->psr.c = value64 >= 0;
-			machine->psr.n = value < 0;
-			machine->psr.z = value == 0;
-			machine->psr.v = value != (uint32_t)value64;
-			if (machine->loglevel >= LOG_INSTRS) {
-				fprintf(stderr, "CMP %x - %x -> V=%d (PC: %x)\n", *reg_dst, *reg_src, (int)machine->psr.v, *pc - 3);
-			}
+			machine_instr_subs(machine, *reg_dst, *reg_src);
 			set_cc = false;
 		} else if (op == 0b1100) { // ORRS
 			// does not update C or V
@@ -424,15 +435,7 @@ int machine_step(machine_t *machine) {
 				*reg_dst += *reg_src;
 			} else if (op == 1) { // CMP
 				// set CC on Rd - Rs
-				int32_t value = *reg_dst - *reg_src;
-				int64_t value64 = (uint64_t)*reg_dst - (uint64_t)*reg_src;
-				machine->psr.c = value64 >= 0;
-				machine->psr.n = value < 0;
-				machine->psr.z = value == 0;
-				machine->psr.v = value != (uint32_t)value64;
-				if (machine->loglevel >= LOG_INSTRS) {
-					fprintf(stderr, "CMP %x - %x -> V=%d (PC: %x)\n", *reg_dst, *reg_src, (int)machine->psr.v, *pc - 3);
-				}
+				machine_instr_subs(machine, *reg_dst, *reg_src);
 			} else if (op == 2) { // MOV
 				*reg_dst = *reg_src;
 				if (reg_dst == pc) {
