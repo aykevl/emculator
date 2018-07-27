@@ -6,10 +6,13 @@
 #include <stdlib.h>
 
 typedef struct {
-	bool n; // negative
-	bool z; // zero
-	bool c; // carry
-	bool v; // overflow
+	uint32_t :24;
+	uint32_t t:1; // Thumb mode
+	uint32_t :3;
+	uint32_t v:1; // overflow
+	uint32_t c:1; // carry
+	uint32_t z:1; // zero
+	uint32_t n:1; // negative
 } flags_t;
 
 #define MACHINE_BACKTRACE_LEN (100)
@@ -43,12 +46,10 @@ typedef struct {
 				uint32_t r15;
 				uint32_t pc;
 			};
+			flags_t psr; // CPU flags
 		};
-		uint32_t regs[16];
+		uint32_t regs[17];
 	};
-
-	// CPU flags
-	flags_t psr;
 
 	// ROM/flash area
 	union {

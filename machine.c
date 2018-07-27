@@ -814,6 +814,7 @@ machine_t * machine_create(size_t image_size, size_t pagesize, size_t ram_size, 
 	machine->loglevel = loglevel;
 	machine->image_size = image_size;
 	machine->mem_size = ram_size;
+	machine->psr.t = 1; // Thumb mode
 
 	uint32_t *image = malloc(image_size);
 	memset(image, 0xff, image_size); // erase flash
@@ -867,7 +868,7 @@ void machine_run(machine_t *machine) {
 				fprintf(stderr, "\nERROR: unknown error: %d\n", err);
 				break;
 		}
-		if (err != 0) {
+		if (err != 0 && err != ERR_BREAK) {
 			machine_print_registers(machine);
 			machine_add_backtrace(machine, machine->pc);
 			fprintf(stderr, "Backtrace:\n");
