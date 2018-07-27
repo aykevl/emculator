@@ -22,10 +22,11 @@ void terminal_enable_raw() {
 	}
 	atexit(terminal_disable_raw);
 	tcgetattr(STDIN_FILENO, &terminal_termios_state);
-	terminal_termios_state.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
-	terminal_termios_state.c_lflag &= ~(ECHO | ICANON | ISIG);
-	terminal_termios_state.c_lflag &= ~(ECHO);
-	tcsetattr(STDIN_FILENO, TCSAFLUSH, &terminal_termios_state);
+	struct termios state = terminal_termios_state;
+	state.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+	state.c_lflag &= ~(ECHO | ICANON | ISIG);
+	state.c_lflag &= ~(ECHO);
+	tcsetattr(STDIN_FILENO, TCSAFLUSH, &state);
 }
 
 static int terminal_getchar_raw() {
