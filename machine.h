@@ -83,8 +83,11 @@ typedef struct {
 	uint32_t backtrace[MACHINE_BACKTRACE_LEN];
 	uint32_t last_sp;
 
+	volatile uint32_t hwbreak[4];
+
 	// misc
 	int loglevel;
+	volatile bool halt;
 } machine_t;
 
 typedef enum {
@@ -102,6 +105,7 @@ enum {
 	ERR_OK,        // no error
 	ERR_EXIT,      // program has exited (should not normally happen on a MCU)
 	ERR_OTHER,     // other (already handled) error
+	ERR_BREAK,     // hit a breakpoint
 	ERR_UNDEFINED, // undefined instruction
 };
 
@@ -115,6 +119,12 @@ enum {
 
 machine_t * machine_create(size_t image_size, size_t pagesize, size_t ram_size, int loglevel);
 void machine_load(machine_t *machine, uint8_t *image, size_t image_size);
+void machine_readmem(machine_t *machine, void *buf, size_t offset, size_t length);
+void machine_readregs(machine_t *machine, uint32_t *regs, size_t num);
+uint32_t machine_readreg(machine_t *machine, size_t reg);
 void machine_reset(machine_t *machine);
+int machine_step(machine_t *machine);
 void machine_run(machine_t *machine);
+void machine_halt(machine_t *machine);
+bool machine_break(machine_t *machine, size_t num, uint32_t addr);
 void machine_free(machine_t *machine);

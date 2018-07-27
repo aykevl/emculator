@@ -9,17 +9,22 @@
 
 static int terminal_buf = -1;
 static struct termios terminal_termios_state;
+static bool terminal_enabled_raw = false;
 
 void terminal_disable_raw() {
+	if (!terminal_enabled_raw) {
+		return;
+	}
+	terminal_enabled_raw = false;
 	tcsetattr(STDIN_FILENO, TCSAFLUSH, &terminal_termios_state);
 }
 
 void terminal_enable_raw() {
 	// https://viewsourcecode.org/snaptoken/kilo/02.enteringRawMode.html
-	static bool enabled_raw = false;
-	if (enabled_raw) {
+	if (terminal_enabled_raw) {
 		return; // make enabling idempotent
 	}
+	terminal_enabled_raw = true;
 	atexit(terminal_disable_raw);
 	tcgetattr(STDIN_FILENO, &terminal_termios_state);
 	struct termios state = terminal_termios_state;

@@ -238,6 +238,13 @@ int machine_step(machine_t *machine) {
 	uint32_t *lr = &machine->lr; // r14
 	uint32_t *sp = &machine->sp; // r13
 
+	if (*pc - 1 == machine->hwbreak[0] ||
+		*pc - 1 == machine->hwbreak[1] ||
+		*pc - 1 == machine->hwbreak[2] ||
+		*pc - 1 == machine->hwbreak[3]) {
+		return ERR_BREAK;
+	}
+
 	// Run instruction
 	// https://ece.uwaterloo.ca/~ece222/ARM/ARM7-TDMI-manual-pt3.pdf
 	// http://hermes.wings.cs.wisc.edu/files/Thumb-2SupplementReferenceManual.pdf
@@ -845,6 +852,11 @@ void machine_free(machine_t *machine) {
 
 void machine_run(machine_t *machine) {
 	while (1) {
+		if (machine->halt) {
+			machine->halt = false;
+			return;
+		}
+
 		// Print registers
 		if (machine->loglevel >= LOG_INSTRS || (machine->loglevel >= LOG_CALLS_SP && machine->sp != machine->last_sp)) {
 			machine->last_sp = machine->sp;
@@ -861,6 +873,9 @@ void machine_run(machine_t *machine) {
 				break;
 			case ERR_EXIT:
 				fprintf(stderr, "exited.\n");
+				return;
+			case ERR_BREAK:
+				fprintf(stderr, "\nhit breakpoint at address %x\n", machine->pc - 3);
 				return;
 			case ERR_OTHER:
 				break; // already printed
@@ -882,4 +897,48 @@ void machine_run(machine_t *machine) {
 			return;
 		}
 	}
+}
+
+void machine_readmem(machine_t *machine, void *buf, size_t address, size_t length) {
+	if (address % 4 == 0 && length % 4 == 0) {
+		for (size_t i=0; i<length; i += 4) {
+			uint32_t reg;
+			machine_transfer(machine, address + i, LOAD, &reg, WIDTH_32, false);
+			((uint32_t*)buf)[i / 4] = reg;
+		}
+	} else {
+		for (size_t i=0; i<length; i++) {
+			uint32_t reg;
+			machine_transfer(machine, address + i, LOAD, &reg, WIDTH_8, false);
+			((uint8_t*)buf)[i] = reg;
+		}
+	}
+}
+
+void machine_readregs(machine_t *machine, uint32_t *regs, size_t num) {
+	if (num < sizeof(machine->regs) / sizeof(machine->regs[0])) {
+		num = sizeof(machine->regs) / sizeof(machine->regs[0]);
+	}
+	for (size_t i=0; i<num; i++) {
+		regs[i] = machine->regs[i];
+	}
+}
+
+uint32_t machine_readreg(machine_t *machine, size_t reg) {
+	if (reg >= sizeof(machine->regs) / sizeof(machine->regs[0])) {
+		return 0;
+	}
+	return machine->regs[reg];
+}
+
+void machine_halt(machine_t *machine) {
+	machine->halt = true;
+}
+
+bool machine_break(machine_t *machine, size_t num, uint32_t addr) {
+	if (num >= sizeof(machine->hwbreak) / sizeof(machine->hwbreak[0])) {
+		return false;
+	}
+	machine->hwbreak[num] = addr;
+	return true;
 }
