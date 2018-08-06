@@ -105,9 +105,9 @@ enum {
 	ERR_OK,        // no error
 	ERR_HALT,      // program has paused after a request
 	ERR_EXIT,      // program has exited (should not normally happen on a MCU)
+	ERR_BREAK,     // hit a breakpoint
 	ERR_MEM,       // memory error
 	ERR_PC,        // invalid PC
-	ERR_BREAK,     // hit a breakpoint
 	ERR_UNDEFINED, // undefined instruction
 };
 

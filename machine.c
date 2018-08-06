@@ -870,26 +870,30 @@ int machine_run(machine_t *machine) {
 
 		// Execute a single instruction
 		int err = machine_step(machine);
-		if (machine_loglevel(machine) >= LOG_ERROR) {
-			switch (err) {
-				case 0:
-					break; // no error
-				case ERR_UNDEFINED:
-					fprintf(stderr, "\nERROR: unknown instruction %04x at address %x\n", machine->image16[machine->pc/2 - 1], machine->pc - 3);
-					break;
-				case ERR_EXIT:
-					fprintf(stderr, "exited.\n");
-					break;
-				case ERR_BREAK:
-					fprintf(stderr, "\nhit breakpoint at address %x\n", machine->pc - 3);
-					break;
-				case ERR_PC:
-					fprintf(stderr, "\nERROR: invalid PC address: 0x%08x\n", machine->pc);
-					break;
-				default:
-					fprintf(stderr, "\nERROR: unknown error: %d\n", err);
-					break;
-			}
+		switch (err) {
+			case ERR_OK:
+				break; // no error
+			case ERR_HALT:
+				// expected
+				break;
+			case ERR_EXIT:
+				machine_log(machine, LOG_ERROR, "exited.\n");
+				break;
+			case ERR_BREAK:
+				machine_log(machine, LOG_ERROR, "\nhit breakpoint at address %x\n", machine->pc - 3);
+				break;
+			case ERR_MEM:
+				// already printed
+				break;
+			case ERR_PC:
+				machine_log(machine, LOG_ERROR, "\nERROR: invalid PC address: 0x%08x\n", machine->pc);
+				break;
+			case ERR_UNDEFINED:
+				machine_log(machine, LOG_ERROR, "\nERROR: unknown instruction %04x at address %x\n", machine->image16[machine->pc/2 - 1], machine->pc - 3);
+				break;
+			default:
+				machine_log(machine, LOG_ERROR, "\nERROR: unknown error: %d\n", err);
+				break;
 		}
 		if (err != 0 && err != ERR_BREAK) {
 			if (machine_loglevel(machine) < LOG_INSTRS) { // don't double-log

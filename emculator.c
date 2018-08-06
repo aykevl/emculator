@@ -19,7 +19,7 @@ static void usage(char *argv[]) {
 }
 
 int main(int argc, char *argv[]) {
-	int loglevel = 1;
+	int loglevel = LOG_ERROR;
 	int opt;
 	while ((opt = getopt(argc, argv, "v")) != -1) {
 		switch (opt) {
