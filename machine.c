@@ -5,6 +5,10 @@
 #include <stdio.h>
 #include <string.h>
 
+// TODO: make this configurable
+#define machine_loglevel(machine) (machine->loglevel)
+#define machine_log(machine, level, ...) ((machine->loglevel >= level) ? fprintf(stderr, __VA_ARGS__) : 0)
+
 static int machine_transfer(machine_t *machine, uint32_t address, transfer_type_t transfer_type, uint32_t *reg, width_t width, bool signextend) {
 	// Select memory region
 	uint32_t region = address >> 29; // 3 bits for the region
@@ -18,12 +22,12 @@ static int machine_transfer(machine_t *machine, uint32_t address, transfer_type_
 		}
 		if (transfer_type == STORE) {
 			if ((address & 3) != 0 || width != WIDTH_32) {
-				fprintf(stderr, "ERROR: unaligned write to read-only memory (PC: %x)\n", machine->pc - 3);
-				return ERR_OTHER;
+				machine_log(machine, LOG_ERROR, "ERROR: unaligned write to read-only memory (PC: %x)\n", machine->pc - 3);
+				return ERR_MEM;
 			}
 			if (!machine->image_writable) {
-				fprintf(stderr, "ERROR: write to read-only memory (PC: %x)\n", machine->pc - 3);
-				return ERR_OTHER;
+				machine_log(machine, LOG_ERROR, "ERROR: write to read-only memory (PC: %x)\n", machine->pc - 3);
+				return ERR_MEM;
 			}
 
 			// Emulate NOR memory where bits can only be cleared.
@@ -40,8 +44,8 @@ static int machine_transfer(machine_t *machine, uint32_t address, transfer_type_
 		// Make this a special case
 		uint32_t value = 0;
 		if ((address & 3) != 0 || width != WIDTH_32) {
-			fprintf(stderr, "\nERROR: invalid %s peripheral address: 0x%08x (PC: %x)\n", transfer_type == LOAD ? "load" : "store", address, machine->pc - 3);
-			return ERR_OTHER;
+			machine_log(machine, LOG_ERROR, "\nERROR: invalid %s peripheral address: 0x%08x (PC: %x)\n", transfer_type == LOAD ? "load" : "store", address, machine->pc - 3);
+			return ERR_MEM;
 		}
 		if (transfer_type == STORE && address == 0x40002000) { // STARTRX
 		} else if (transfer_type == STORE && address == 0x40002004) { // STOPRX
@@ -67,15 +71,13 @@ static int machine_transfer(machine_t *machine, uint32_t address, transfer_type_
 			machine->image_writable = *reg != 0;
 		} else if (transfer_type == STORE && address == 0x4001e508) { // NVMC.ERASEPAGE
 			if ((*reg & (machine->pagesize-1)) != 0 || *reg >= machine->image_size) {
-				fprintf(stderr, "ERROR: invalid page address: %x (PC: %x)\n", *reg, machine->pc - 3);
-				return ERR_OTHER;
+				machine_log(machine, LOG_ERROR, "ERROR: invalid page address: %x (PC: %x)\n", *reg, machine->pc - 3);
+				return ERR_MEM;
 			}
 			// Emulate erasing NOR flash.
 			memset(machine->image8 + *reg, 0xff, machine->pagesize);
 		} else {
-			if (machine->loglevel >= LOG_WARN) {
-				fprintf(stderr, "unknown %s peripheral address: 0x%08x (value: 0x%x, PC: %x)\n", transfer_type == LOAD ? "load" : "store", address, *reg, machine->pc - 3);
-			}
+			machine_log(machine, LOG_WARN, "unknown %s peripheral address: 0x%08x (value: 0x%x, PC: %x)\n", transfer_type == LOAD ? "load" : "store", address, *reg, machine->pc - 3);
 		}
 		if (transfer_type == LOAD) {
 			if (width == WIDTH_8) {
@@ -88,31 +90,25 @@ static int machine_transfer(machine_t *machine, uint32_t address, transfer_type_
 		return 0;
 	} else if (region == 7) {
 		if ((address & 3) != 0) {
-			fprintf(stderr, "\nERROR: invalid device/private address: 0x%08x\n", address);
-			return ERR_OTHER;
+			machine_log(machine, LOG_ERROR, "\nERROR: invalid device/private address: 0x%08x\n", address);
+			return ERR_MEM;
 		}
 		// Private peripheral bus + Device: 0xe0000000 .. 0xffffffff
 		if ((address == 0xe000e100 && transfer_type == STORE)) {
 			// NVIC Interrupt Set-enable Register
-			if (machine->loglevel >= LOG_WARN) {
-				fprintf(stderr, "set interrupts: %08x\n", *reg);
-			}
+			machine_log(machine, LOG_WARN, "set interrupts: %08x\n", *reg);
 			return 0;
 		}
 		if ((address == 0xe000e180 && transfer_type == STORE)) {
 			// NVIC Interrupt Clear-enable Register
-			if (machine->loglevel >= LOG_WARN) {
-				fprintf(stderr, "clear interrupts: %08x\n", *reg);
-			}
+			machine_log(machine, LOG_WARN, "clear interrupts: %08x\n", *reg);
 			return 0;
 		}
 		if (((address & 0xfffffff0) == 0xe000e400)) {
 			ptr = &machine->nvic.ip[(address / 4) % 8];
 		}
 		if ((address & 0xfffffff0) == 0xf0000fe0 && transfer_type == LOAD) {
-			if (machine->loglevel >= LOG_WARN) {
-				fprintf(stderr, "private address: %x\n", address);
-			}
+			machine_log(machine, LOG_WARN, "private address: %x\n", address);
 			// 0xf0000fe0, 0xf0000fe4, 0xf0000fe8, 0xf0000fec
 			// Not sure what this is all about but this is what the nrf
 			// seems to expect...
@@ -122,11 +118,15 @@ static int machine_transfer(machine_t *machine, uint32_t address, transfer_type_
 	}
 
 	if (ptr == 0) {
-		fprintf(stderr, "\nERROR: invalid %s address: 0x%08x (PC: %x)\n", transfer_type == LOAD ? "load" : "store", address, machine->pc - 3);
-		return ERR_OTHER;
+		if (transfer_type == LOAD) {
+			machine_log(machine, LOG_ERROR, "\nERROR: invalid load address: 0x%08x (PC: %x)\n", address, machine->pc - 3);
+		} else {
+			machine_log(machine, LOG_ERROR, "\nERROR: invalid store address: 0x%08x (PC: %x, value: %x)\n", address, machine->pc - 3, *reg);
+		}
+		return ERR_MEM;
 	} else if ((width == WIDTH_16 && (address & 1) != 0) || (width == WIDTH_32 && (address & 3) != 0)) {
-		fprintf(stderr, "\nERROR: unaligned %s address: 0x%08x (PC: %x)\n", transfer_type == LOAD ? "load" : "store", address, machine->pc - 3);
-		return ERR_OTHER;
+		machine_log(machine, LOG_ERROR, "\nERROR: unaligned %s address: 0x%08x (PC: %x)\n", transfer_type == LOAD ? "load" : "store", address, machine->pc - 3);
+		return ERR_MEM;
 	}
 
 	if (transfer_type == LOAD) {
@@ -172,9 +172,7 @@ void machine_reset(machine_t *machine) {
 	machine->lr = 0xdeadbeef; // exit address
 	machine->pc = machine->image32[1]; // Reset_Vector address
 	machine->backtrace[1] = machine->pc - 1;
-	if (machine->loglevel >= LOG_CALLS) {
-		fprintf(stderr, "RESET %5x (sp: %x)\n", machine->pc - 1, machine->sp);
-	}
+	machine_log(machine, LOG_CALLS, "RESET %5x (sp: %x)\n", machine->pc - 1, machine->sp);
 }
 
 static void machine_add_backtrace(machine_t *machine, uint32_t pc) {
@@ -253,12 +251,10 @@ int machine_step(machine_t *machine) {
 		return ERR_EXIT;
 	}
 	if (*pc > machine->image_size - 2) {
-		fprintf(stderr, "\nERROR: PC address is out of range: 0x%08x\n", *pc);
-		return ERR_OTHER;
+		return ERR_PC;
 	}
 	if ((*pc & 1) != 1) {
-		fprintf(stderr, "\nERROR: PC address must have the high bit set: 0x%08x\n", *pc);
-		return ERR_OTHER;
+		return ERR_PC;
 	}
 	uint16_t instruction = machine->image16[*pc/2];
 
@@ -399,8 +395,7 @@ int machine_step(machine_t *machine) {
 			// does not update C or V
 			*reg_dst = ~*reg_src;
 		} else {
-			fprintf(stderr, "\nERROR: unimplemented: ALU operation %u (%04x, PC: %x)\n", op, instruction, *pc - 3);
-			return ERR_OTHER;
+			return ERR_UNDEFINED;
 		}
 		if (set_cc) {
 			machine->psr.n = (int32_t)*reg_dst < 0;
@@ -417,18 +412,13 @@ int machine_step(machine_t *machine) {
 		reg_src += h2 * 8; // make high register (if h2 is 1)
 		if (op == 3) { // BX/BLX
 			if (reg_dst != &machine->r0) {
-				fprintf(stderr, "\nERROR: invalid instruction: BX/BLX lower bits != 0 (%04x)\n", instruction);
-				return ERR_OTHER;
+				return ERR_UNDEFINED; // unimplemented
 			}
 			if (h1) {
-				if (machine->loglevel >= LOG_CALLS) {
-					fprintf(stderr, "%*sBLX r%ld %6x (sp: %x) -> %x\n", machine->call_depth * 2, "", reg_src - machine->regs, *pc - 3, *sp, *reg_src - 1);
-				}
+				machine_log(machine, LOG_CALLS, "%*sBLX r%ld %6x (sp: %x) -> %x\n", machine->call_depth * 2, "", reg_src - machine->regs, *pc - 3, *sp, *reg_src - 1);
 				machine_add_backtrace(machine, *pc - 3);
 			} else if (reg_src == lr) {
-				if (machine->loglevel >= LOG_CALLS) {
-					fprintf(stderr, "%*sBX lr %6x (sp: %x) <- %x\n", machine->call_depth * 2, "", *pc - 3, *sp, *reg_src - 1);
-				}
+				machine_log(machine, LOG_CALLS, "%*sBX lr %6x (sp: %x) <- %x\n", machine->call_depth * 2, "", *pc - 3, *sp, *reg_src - 1);
 				machine_sub_backtrace(machine);
 			}
 			uint32_t next_lr = *pc;
@@ -457,7 +447,7 @@ int machine_step(machine_t *machine) {
 		uint32_t *reg = &machine->regs[(instruction >> 8)  & 0b111];
 		uint32_t address = ((*pc + 2) >> 2U << 2U) + imm * 4;
 		if (machine_transfer(machine, address, LOAD, reg, WIDTH_32, false)) {
-			return ERR_OTHER;
+			return ERR_MEM;
 		}
 
 	} else if ((instruction >> 12) == 0b0101) {
@@ -465,13 +455,13 @@ int machine_step(machine_t *machine) {
 		uint32_t *reg_base   = &machine->regs[(instruction >> 3) & 0b111];
 		uint32_t *reg_offset = &machine->regs[(instruction >> 6) & 0b111];
 		if (((instruction >> 9) & 0b1) == 0) {
-			// Format 7: Load/store with register offset
+			// Format 7: Load/store with register offset (LDR)
 			bool flag_byte = (instruction >> 10) & 0b1;
 			bool flag_load = (instruction >> 11) & 0b1;
 			transfer_type_t transfer_type = flag_load ? LOAD : STORE;
 			width_t width = flag_byte ? WIDTH_8 : WIDTH_32;
 			if (machine_transfer(machine, *reg_base + *reg_offset, transfer_type, reg_change, width, false)) {
-				return ERR_OTHER;
+				return ERR_MEM;
 			}
 		} else {
 			// Format 8: Load/store sign-extended byte/halfword
@@ -481,17 +471,17 @@ int machine_step(machine_t *machine) {
 			if (flag_sign_extend) {
 				if (flag_H) {
 					if (machine_transfer(machine, address, LOAD, reg_change, WIDTH_16, true)) { // LDSH
-						return ERR_OTHER;
+						return ERR_MEM;
 					}
 				} else {
 					if (machine_transfer(machine, address, LOAD, reg_change, WIDTH_8, true)) { // LDSB
-						return ERR_OTHER;
+						return ERR_MEM;
 					}
 				}
 			} else {
 				transfer_type_t transfer_type = flag_H ? LOAD : STORE;
 				if (machine_transfer(machine, address, transfer_type, reg_change, WIDTH_16, false)) { // STRH/LDRH
-					return ERR_OTHER;
+					return ERR_MEM;
 				}
 			}
 		}
@@ -507,12 +497,12 @@ int machine_step(machine_t *machine) {
 		if (flag_byte) {
 			uint32_t address = *reg_base + offset5;
 			if (machine_transfer(machine, address, transfer_type, reg_change, WIDTH_8, false)) {
-				return ERR_OTHER;
+				return ERR_MEM;
 			}
 		} else {
 			uint32_t address = *reg_base + offset5 * 4;
 			if (machine_transfer(machine, address, transfer_type, reg_change, WIDTH_32, false)) {
-				return ERR_OTHER;
+				return ERR_MEM;
 			}
 		}
 
@@ -525,7 +515,7 @@ int machine_step(machine_t *machine) {
 		transfer_type_t transfer_type = flag_load ? LOAD : STORE;
 		uint32_t address = *reg_base + (offset5 << 1);
 		if (machine_transfer(machine, address, transfer_type, reg_change, WIDTH_16, false)) {
-			return ERR_OTHER;
+			return ERR_MEM;
 		}
 
 	} else if ((instruction >> 12) == 0b1001) {
@@ -535,7 +525,7 @@ int machine_step(machine_t *machine) {
 		bool     flag_load = (instruction >> 11) & 0b1;
 		transfer_type_t transfer_type = flag_load ? LOAD : STORE;
 		if (machine_transfer(machine, *sp + word8 * 4, transfer_type, reg, WIDTH_32, false)) {
-			return ERR_OTHER;
+			return ERR_MEM;
 		}
 
 	} else if ((instruction >> 12) == 0b1010) {
@@ -555,16 +545,13 @@ int machine_step(machine_t *machine) {
 		uint32_t offset6  = (instruction >> 0) & 0x3f; // 6 bits
 		bool     flag_neg = (instruction >> 7) & 0b1;
 		if (flag_neg) { // SUB SP, #imm
-			if (machine->loglevel >= LOG_CALLS) {
-				fprintf(stderr, "%*ssub     0x%02x (sp: %x)\n", machine->call_depth * 2, "", offset6 * 4, *sp);
-			}
+			machine_log(machine, LOG_CALLS, "%*ssub     0x%02x (sp: %x)\n", machine->call_depth * 2, "", offset6 * 4, *sp);
 			*sp -= offset6 * 4;
 		} else { // ADD SP, #imm
-			if (machine->loglevel >= LOG_CALLS) {
-				fprintf(stderr, "%*sadd    %2x (sp: %x)\n", machine->call_depth * 2, "", offset6 * 4, *sp);
-			}
+			machine_log(machine, LOG_CALLS, "%*sadd    %2x (sp: %x)\n", machine->call_depth * 2, "", offset6 * 4, *sp);
 			*sp += offset6 * 4;
 		}
+
 	} else if ((instruction >> 8) == 0b10110010) {
 		// Sign or zero extend
 		uint32_t *reg_dst = &machine->regs[(instruction >> 0) & 0b111];
@@ -608,8 +595,7 @@ int machine_step(machine_t *machine) {
 		if (imm8 == 0x81) {
 			machine->loglevel = LOG_INSTRS;
 		} else {
-			fprintf(stderr, "Execution has hit breakpoint %d at PC=%x.\n", imm8, machine->pc - 3);
-			return ERR_OTHER;
+			return ERR_BREAK;
 		}
 
 	} else if ((instruction >> 12) == 0b1011 && ((instruction >> 9) & 0b11) == 0b10) { // 1011x10
@@ -620,11 +606,9 @@ int machine_step(machine_t *machine) {
 		if (flag_load) { // POP
 			for (int i = 0; i < 8; i++) {
 				if (reg_list & (1 << i)) {
-					if (machine->loglevel >= LOG_CALLS) {
-						fprintf(stderr, "%*spop r%d       (sp: %x)\n", machine->call_depth * 2, "", i, *sp);
-					}
+					machine_log(machine, LOG_CALLS, "%*spop r%d       (sp: %x)\n", machine->call_depth * 2, "", i, *sp);
 					if (machine_transfer(machine, *sp, LOAD, &machine->regs[i], WIDTH_32, false)) {
-						return ERR_OTHER;
+						return ERR_MEM;
 					}
 					*sp += 4;
 				}
@@ -632,32 +616,26 @@ int machine_step(machine_t *machine) {
 			if (flag_pc_lr) {
 				uint32_t old_pc = *pc;
 				if (machine_transfer(machine, *sp, LOAD, pc, WIDTH_32, false)) {
-					return ERR_OTHER;
+					return ERR_MEM;
 				}
-				if (machine->loglevel >= LOG_CALLS) {
-					fprintf(stderr, "%*sPOP pc %5x (sp: %x) <- %5x\n", machine->call_depth * 2, "", old_pc - 3, *sp, *pc - 1);
-				}
+				machine_log(machine, LOG_CALLS, "%*sPOP pc %5x (sp: %x) <- %5x\n", machine->call_depth * 2, "", old_pc - 3, *sp, *pc - 1);
 				machine_sub_backtrace(machine);
 				*sp += 4;
 			}
 		} else { // PUSH
 			if (flag_pc_lr) {
 				*sp -= 4;
-				if (machine->loglevel >= LOG_CALLS) {
-					fprintf(stderr, "%*spush lr      (sp: %x) (lr: %x)\n", machine->call_depth * 2, "", *sp, *lr + 2);
-				}
+				machine_log(machine, LOG_CALLS, "%*spush lr      (sp: %x) (lr: %x)\n", machine->call_depth * 2, "", *sp, *lr + 2);
 				if (machine_transfer(machine, *sp, STORE, lr, WIDTH_32, false)) {
-					return ERR_OTHER;
+					return ERR_MEM;
 				}
 			}
 			for (int i = 7; i >= 0; i--) {
 				if (reg_list & (1 << i)) {
 					*sp -= 4;
-					if (machine->loglevel >= LOG_CALLS) {
-						fprintf(stderr, "%*spush r%d      (sp: %x)\n", machine->call_depth * 2, "", i, *sp);
-					}
+					machine_log(machine, LOG_CALLS, "%*spush r%d      (sp: %x)\n", machine->call_depth * 2, "", i, *sp);
 					if (machine_transfer(machine, *sp, STORE, &machine->regs[i], WIDTH_32, false)) {
-						return ERR_OTHER;
+						return ERR_MEM;
 					}
 				}
 			}
@@ -669,8 +647,8 @@ int machine_step(machine_t *machine) {
 		uint32_t *reg_base = &machine->regs[(instruction >> 8) & 0b111];
 		bool     flag_load = (instruction >> 11) & 0b1;
 		if (reg_list == 0) {
-			fprintf(stderr, "\nERROR: LDMIA/STMIA does not allow zero registers (%04x)\n", instruction);
-			return ERR_OTHER;
+			machine_log(machine, LOG_ERROR, "\nERROR: LDMIA/STMIA does not allow zero registers (%04x)\n", instruction);
+			return ERR_UNDEFINED;
 		}
 		uint32_t address = *reg_base;
 		size_t offset = 0;
@@ -679,7 +657,7 @@ int machine_step(machine_t *machine) {
 				uint32_t *reg = &machine->regs[i];
 				transfer_type_t transfer_type = flag_load ? LOAD : STORE;
 				if (machine_transfer(machine, address + offset, transfer_type, reg, WIDTH_32, false)) {
-					return ERR_OTHER;
+					return ERR_MEM;
 				}
 				offset += 4;
 			}
@@ -743,12 +721,10 @@ int machine_step(machine_t *machine) {
 		} else {
 			return ERR_UNDEFINED;
 		}
-		if (machine->loglevel >= LOG_CALLS) {
-			if (old_pc != *pc) {
-				fprintf(stderr, "%*sBcond %6x (sp: %x) -> %x\n", machine->call_depth * 2, "", old_pc - 3, *sp, *pc - 1);
-			} else {
-				fprintf(stderr, "%*sBcond %6x (sp: %x) -> !%x\n", machine->call_depth * 2, "", old_pc - 3, *sp, *pc - 1);
-			}
+		if (old_pc != *pc) {
+			machine_log(machine, LOG_CALLS, "%*sBcond %6x (sp: %x) -> %x\n", machine->call_depth * 2, "", old_pc - 3, *sp, *pc - 1);
+		} else {
+			machine_log(machine, LOG_CALLS, "%*sBcond %6x (sp: %x) -> !%x\n", machine->call_depth * 2, "", old_pc - 3, *sp, *pc - 1);
 		}
 
 	} else if ((instruction >> 11) == 0b11100) {
@@ -757,9 +733,7 @@ int machine_step(machine_t *machine) {
 		int32_t offset = ((int32_t)(offset11 << 21) >> 20);
 		uint32_t old_pc = *pc;
 		*pc += offset + 2;
-		if (machine->loglevel >= LOG_CALLS) {
-			fprintf(stderr, "%*sB    %7x (sp: %x) -> %x\n", machine->call_depth * 2, "", old_pc - 3, *sp, *pc - 1);
-		}
+		machine_log(machine, LOG_CALLS, "%*sB    %7x (sp: %x) -> %x\n", machine->call_depth * 2, "", old_pc - 3, *sp, *pc - 1);
 
 	} else if ((instruction >> 12) == 0b1111) {
 		// 32-bit instruction
@@ -775,9 +749,7 @@ int machine_step(machine_t *machine) {
 			pc_offset <<= 10;
 			pc_offset >>= 10;
 			uint32_t new_pc = (int32_t)*pc + pc_offset;
-			if (machine->loglevel >= LOG_CALLS) {
-				fprintf(stderr, "%*sBL   %7x (sp: %x) -> %x\n", machine->call_depth * 2, "", *pc, *sp, new_pc - 1);
-			}
+			machine_log(machine, LOG_CALLS, "%*sBL   %7x (sp: %x) -> %x\n", machine->call_depth * 2, "", *pc, *sp, new_pc - 1);
 			machine_add_backtrace(machine, *pc - 5);
 			*lr = *pc;
 			*pc = new_pc;
@@ -798,20 +770,22 @@ int machine_step(machine_t *machine) {
 }
 
 void machine_print_registers(machine_t *machine) {
-	fprintf(stderr, "\n[ ");
+	machine_log(machine, LOG_ERROR, "\n[ ");
 	for (size_t i=0; i<8; i++) {
-		fprintf(stderr, "%8x ", machine->regs[i]);
+		machine_log(machine, LOG_ERROR, "%8x ", machine->regs[i]);
 	}
-	fprintf(stderr, ".. %8x ", machine->sp);     // sp
-	fprintf(stderr, "%8x ",    machine->lr - 1); // lr, not entirely correct
-	fprintf(stderr, "%8x ",    machine->pc - 1); // pc, not entirely correct
-	fprintf(stderr, "%c%c%c%c ", machine->psr.n ? 'N' : '_', machine->psr.z ? 'Z' : '_', machine->psr.c ? 'C' : '_', machine->psr.v ? 'V' : '_');
-	fprintf(stderr, "]\n");
+	machine_log(machine, LOG_ERROR, ".. %8x ", machine->sp);     // sp
+	machine_log(machine, LOG_ERROR, "%8x ",    machine->lr - 1); // lr, not entirely correct
+	machine_log(machine, LOG_ERROR, "%8x ",    machine->pc - 1); // pc, not entirely correct
+	machine_log(machine, LOG_ERROR, "%c%c%c%c ", machine->psr.n ? 'N' : '_', machine->psr.z ? 'Z' : '_', machine->psr.c ? 'C' : '_', machine->psr.v ? 'V' : '_');
+	machine_log(machine, LOG_ERROR, "]\n");
 }
 
 machine_t * machine_create(size_t image_size, size_t pagesize, size_t ram_size, int loglevel) {
 	if (image_size < 16 * 4) {
-		fprintf(stderr, "\nERROR: image is too small to contain an executable\n");
+		if (loglevel >= LOG_ERROR) {
+			fprintf(stderr, "\nERROR: image is too small to contain an executable\n");
+		}
 		return NULL;
 	}
 
@@ -850,51 +824,56 @@ void machine_free(machine_t *machine) {
 	free(machine);
 }
 
-void machine_run(machine_t *machine) {
+int machine_run(machine_t *machine) {
 	while (1) {
 		if (machine->halt) {
 			machine->halt = false;
-			return;
+			return ERR_HALT;
 		}
 
 		// Print registers
-		if (machine->loglevel >= LOG_INSTRS || (machine->loglevel >= LOG_CALLS_SP && machine->sp != machine->last_sp)) {
+		if (machine_loglevel(machine) >= LOG_INSTRS || (machine_loglevel(machine) >= LOG_CALLS_SP && machine->sp != machine->last_sp)) {
 			machine->last_sp = machine->sp;
 			machine_print_registers(machine);
 		}
 
 		// Execute a single instruction
 		int err = machine_step(machine);
-		switch (err) {
-			case 0:
-				break; // no error
-			case ERR_UNDEFINED:
-				fprintf(stderr, "\nERROR: unknown instruction %04x at address %x\n", machine->image16[machine->pc/2 - 1], machine->pc - 3);
-				break;
-			case ERR_EXIT:
-				fprintf(stderr, "exited.\n");
-				return;
-			case ERR_BREAK:
-				fprintf(stderr, "\nhit breakpoint at address %x\n", machine->pc - 3);
-				return;
-			case ERR_OTHER:
-				break; // already printed
-			default:
-				fprintf(stderr, "\nERROR: unknown error: %d\n", err);
-				break;
+		if (machine_loglevel(machine) >= LOG_ERROR) {
+			switch (err) {
+				case 0:
+					break; // no error
+				case ERR_UNDEFINED:
+					fprintf(stderr, "\nERROR: unknown instruction %04x at address %x\n", machine->image16[machine->pc/2 - 1], machine->pc - 3);
+					break;
+				case ERR_EXIT:
+					fprintf(stderr, "exited.\n");
+					break;
+				case ERR_BREAK:
+					fprintf(stderr, "\nhit breakpoint at address %x\n", machine->pc - 3);
+					break;
+				case ERR_PC:
+					fprintf(stderr, "\nERROR: invalid PC address: 0x%08x\n", machine->pc);
+					break;
+				default:
+					fprintf(stderr, "\nERROR: unknown error: %d\n", err);
+					break;
+			}
 		}
 		if (err != 0 && err != ERR_BREAK) {
-			machine_print_registers(machine);
+			if (machine_loglevel(machine) < LOG_INSTRS) { // don't double-log
+				machine_print_registers(machine);
+			}
 			machine_add_backtrace(machine, machine->pc);
-			fprintf(stderr, "Backtrace:\n");
+			machine_log(machine, LOG_ERROR, "Backtrace:\n");
 			for (int i = 1; i < machine->call_depth; i++) {
 				if (i >= MACHINE_BACKTRACE_LEN) {
-					fprintf(stderr, " %3d. (too much recursion)\n", i);
+					machine_log(machine, LOG_ERROR, " %3d. (too much recursion)\n", i);
 					break;
 				}
-				fprintf(stderr, " %3d. %8x\n", i, machine->backtrace[i]);
+				machine_log(machine, LOG_ERROR, " %3d. %8x\n", i, machine->backtrace[i]);
 			}
-			return;
+			return err;
 		}
 	}
 }

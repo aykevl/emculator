@@ -103,13 +103,16 @@ typedef enum {
 
 enum {
 	ERR_OK,        // no error
+	ERR_HALT,      // program has paused after a request
 	ERR_EXIT,      // program has exited (should not normally happen on a MCU)
-	ERR_OTHER,     // other (already handled) error
+	ERR_MEM,       // memory error
+	ERR_PC,        // invalid PC
 	ERR_BREAK,     // hit a breakpoint
 	ERR_UNDEFINED, // undefined instruction
 };
 
 enum {
+	LOG_NONE,     // don't log anything
 	LOG_ERROR,    // only log critical errors
 	LOG_WARN,     // log warnings
 	LOG_CALLS,    // log all branch/stack related instructions
@@ -124,7 +127,7 @@ void machine_readregs(machine_t *machine, uint32_t *regs, size_t num);
 uint32_t machine_readreg(machine_t *machine, size_t reg);
 void machine_reset(machine_t *machine);
 int machine_step(machine_t *machine);
-void machine_run(machine_t *machine);
+int machine_run(machine_t *machine);
 void machine_halt(machine_t *machine);
 bool machine_break(machine_t *machine, size_t num, uint32_t addr);
 void machine_free(machine_t *machine);
