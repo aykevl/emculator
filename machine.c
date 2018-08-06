@@ -250,6 +250,47 @@ static uint32_t machine_instr_sbcs(machine_t *machine, uint32_t a, uint32_t b) {
 	return result;
 }
 
+// Return 1 if true, 0 if false, and -1 if invalid.
+static int machine_condition(machine_t *machine, uint32_t condition) {
+	if (condition == 0b0000) { // BEQ: Z == 1
+		return machine->psr.z == true;
+	} else if (condition == 0b0001) { // BNE: Z == 0
+		return machine->psr.z == false;
+	} else if (condition == 0b0010) { // BCS: C == 1
+		return machine->psr.c == true;
+	} else if (condition == 0b0011) { // BCC: C == 0
+		return machine->psr.c == false;
+	} else if (condition == 0b0100) { // BMI: N == 1
+		return machine->psr.n == true;
+	} else if (condition == 0b0101) { // BPL: N == 0
+		return machine->psr.n == false;
+	} else if (condition == 0b1000) { // BHI: C == 1 && Z == 0
+		return machine->psr.c == true && machine->psr.z == false;
+	} else if (condition == 0b1001) { // BLS: C == 0 || Z == 1
+		return machine->psr.c == false || machine->psr.z == true;
+	} else if (condition == 0b1010) { // BGE: N == V
+		return machine->psr.n == machine->psr.v;
+	} else if (condition == 0b1011) { // BLT: N != V
+		return machine->psr.n != machine->psr.v;
+	} else if (condition == 0b1100) { // BGT: Z == 0 && N == V
+		return machine->psr.z == false && machine->psr.n == machine->psr.v;
+	} else if (condition == 0b1101) { // BLE: Z == 1 || N != V
+		// For this instruction, different manuals say different
+		// things.
+		// One option:
+		//   Z == 1 || N != V
+		// Another option:
+		//   Z == 1 && N != V
+		// I've tested compiler-generated code and it appears the
+		// former is correct. Also, it is more consistent with e.g.
+		// BHI/BLS. An example of a page that says otherwise:
+		//   http://infocenter.arm.com/help/index.jsp?topic=/com.arm.doc.dui0497a/BABEHFEF.html
+		return machine->psr.z == true || machine->psr.n != machine->psr.v;
+	} else {
+		return -1;
+	}
+}
+
 int machine_step(machine_t *machine) {
 	// Some handy aliases
 	uint32_t *pc = &machine->pc; // r15
@@ -692,54 +733,12 @@ int machine_step(machine_t *machine) {
 		int32_t offset = ((int32_t)(offset8 << 24) >> 23);
 		offset += 2;
 		uint32_t old_pc = *pc;
-		if (condition == 0b0000) { // BEQ: Z == 1
-			if (machine->psr.z == true)
-				*pc += offset;
-		} else if (condition == 0b0001) { // BNE: Z == 0
-			if (machine->psr.z == false)
-				*pc += offset;
-		} else if (condition == 0b0010) { // BCS: C == 1
-			if (machine->psr.c == true)
-				*pc += offset;
-		} else if (condition == 0b0011) { // BCC: C == 0
-			if (machine->psr.c == false)
-				*pc += offset;
-		} else if (condition == 0b0100) { // BMI: N == 1
-			if (machine->psr.n == true)
-				*pc += offset;
-		} else if (condition == 0b0101) { // BPL: N == 0
-			if (machine->psr.n == false)
-				*pc += offset;
-		} else if (condition == 0b1000) { // BHI: C == 1 && Z == 0
-			if (machine->psr.c == true && machine->psr.z == false)
-				*pc += offset;
-		} else if (condition == 0b1001) { // BLS: C == 0 || Z == 1
-			if (machine->psr.c == false || machine->psr.z == true)
-				*pc += offset;
-		} else if (condition == 0b1010) { // BGE: N == V
-			if (machine->psr.n == machine->psr.v)
-				*pc += offset;
-		} else if (condition == 0b1011) { // BLT: N != V
-			if (machine->psr.n != machine->psr.v)
-				*pc += offset;
-		} else if (condition == 0b1100) { // BGT: Z == 0 && N == V
-			if (machine->psr.z == false && machine->psr.n == machine->psr.v)
-				*pc += offset;
-		} else if (condition == 0b1101) { // BLE: Z == 1 || N != V
-			// For this instruction, different manuals say different
-			// things.
-			// One option:
-			//   Z == 1 || N != V
-			// Another option:
-			//   Z == 1 && N != V
-			// I've tested compiler-generated code and it appears the
-			// former is correct. Also, it is more consistent with e.g.
-			// BHI/BLS. An example of a page that says otherwise:
-			//   http://infocenter.arm.com/help/index.jsp?topic=/com.arm.doc.dui0497a/BABEHFEF.html
-			if (machine->psr.z == true || machine->psr.n != machine->psr.v)
-				*pc += offset;
-		} else {
+		int result = machine_condition(machine, condition);
+		if (result < 0) {
 			return ERR_UNDEFINED;
+		}
+		if (result) {
+			*pc += offset;
 		}
 		if (old_pc != *pc) {
 			machine_log(machine, LOG_CALLS, "%*sBcond %6x (sp: %x) -> %x\n", machine->call_depth * 2, "", old_pc - 3, *sp, *pc - 1);
