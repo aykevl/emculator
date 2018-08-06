@@ -110,22 +110,22 @@ static int machine_transfer(machine_t *machine, uint32_t address, transfer_type_
 		}
 		return 0;
 	} else if (region == 7) {
+		// Private peripheral bus + Device: 0xe0000000 .. 0xffffffff
 		if ((address & 3) != 0) {
 			machine_log(machine, LOG_ERROR, "\nERROR: invalid device/private address: 0x%08x\n", address);
 			return ERR_MEM;
 		}
-		// Private peripheral bus + Device: 0xe0000000 .. 0xffffffff
-		if ((address == 0xe000e100 && transfer_type == STORE)) {
+		if (address == 0xe000e100 && transfer_type == STORE) {
 			// NVIC Interrupt Set-enable Register
 			machine_log(machine, LOG_WARN, "set interrupts: %08x\n", *reg);
 			return 0;
 		}
-		if ((address == 0xe000e180 && transfer_type == STORE)) {
+		if (address == 0xe000e180 && transfer_type == STORE) {
 			// NVIC Interrupt Clear-enable Register
 			machine_log(machine, LOG_WARN, "clear interrupts: %08x\n", *reg);
 			return 0;
 		}
-		if (((address & 0xfffffff0) == 0xe000e400)) {
+		if ((address & 0xfffffff0) == 0xe000e400) {
 			ptr = &machine->nvic.ip[(address / 4) % 8];
 		}
 		if ((address & 0xfffffff0) == 0xf0000fe0 && transfer_type == LOAD) {
@@ -154,7 +154,6 @@ static int machine_transfer(machine_t *machine, uint32_t address, transfer_type_
 		if (width == WIDTH_8) {
 			uint8_t value = *(uint8_t*)ptr;
 			if (signextend) {
-				// TODO: test!
 				*reg = (int8_t)value;
 			} else {
 				*reg = value;
@@ -162,7 +161,6 @@ static int machine_transfer(machine_t *machine, uint32_t address, transfer_type_
 		} else if (width == WIDTH_16) {
 			uint16_t value = *(uint16_t*)ptr;
 			if (signextend) {
-				// TODO: test!
 				*reg = (int16_t)value;
 			} else {
 				*reg = value;
