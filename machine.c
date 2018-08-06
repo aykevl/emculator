@@ -2,12 +2,33 @@
 #include "machine.h"
 #include "terminal.h"
 
-#include <stdio.h>
 #include <string.h>
+
+#ifdef __EMSCRIPTEN__
+
+#include <emscripten.h>
+
+// Implemented in JavaScript.
+void *wasm_malloc(size_t size);
+#define malloc wasm_malloc
+#define calloc(size, nmemb) wasm_malloc(size * nmemb)
+
+#define machine_loglevel(machine) (0)
+#define machine_log(machine, level, ...) ((false) ? fprintf(stderr, __VA_ARGS__) : 0)
+
+#define KEEPALIVE EMSCRIPTEN_KEEPALIVE
+
+#else // all other compilers
+
+#include <stdio.h>
 
 // TODO: make this configurable
 #define machine_loglevel(machine) (machine->loglevel)
 #define machine_log(machine, level, ...) ((machine->loglevel >= level) ? fprintf(stderr, __VA_ARGS__) : 0)
+
+#define KEEPALIVE
+
+#endif
 
 static int machine_transfer(machine_t *machine, uint32_t address, transfer_type_t transfer_type, uint32_t *reg, width_t width, bool signextend) {
 	// Select memory region
@@ -165,6 +186,7 @@ static int machine_transfer(machine_t *machine, uint32_t address, transfer_type_
 	return 0;
 }
 
+KEEPALIVE
 void machine_reset(machine_t *machine) {
 	// Do a reset
 	machine->sp = machine->image32[0]; // initial stack pointer
@@ -192,7 +214,7 @@ static uint32_t machine_instr_adds(machine_t *machine, uint32_t a, uint32_t b) {
 	uint64_t result64u = (uint64_t)a + (uint64_t)b;
 	machine->psr.n = (int32_t)result < 0;
 	machine->psr.z = result == 0;
-	machine->psr.c = result64u >= (1UL << 32); // true if 32-bit overflow
+	machine->psr.c = result64u >= ((uint64_t)1 << 32); // true if 32-bit overflow
 	machine->psr.v = ((int32_t)result < 0) != (result64s < 0);
 	return result;
 }
@@ -203,7 +225,7 @@ static uint32_t machine_instr_adcs(machine_t *machine, uint32_t a, uint32_t b) {
 	uint64_t result64u = (uint64_t)a + (uint64_t)b + machine->psr.c;
 	machine->psr.n = (int32_t)result < 0;
 	machine->psr.z = result == 0;
-	machine->psr.c = result64u >= (1UL << 32); // true if 32-bit overflow
+	machine->psr.c = result64u >= ((uint64_t)1 << 32); // true if 32-bit overflow
 	machine->psr.v = ((int32_t)result < 0) != (result64s < 0);
 	return result;
 }
@@ -781,11 +803,14 @@ void machine_print_registers(machine_t *machine) {
 	machine_log(machine, LOG_ERROR, "]\n");
 }
 
+KEEPALIVE
 machine_t * machine_create(size_t image_size, size_t pagesize, size_t ram_size, int loglevel) {
 	if (image_size < 16 * 4) {
+#if !defined(__EMSCRIPTEN__)
 		if (loglevel >= LOG_ERROR) {
 			fprintf(stderr, "\nERROR: image is too small to contain an executable\n");
 		}
+#endif
 		return NULL;
 	}
 
@@ -816,6 +841,11 @@ void machine_load(machine_t *machine, uint8_t *image, size_t image_size) {
 	memcpy(machine->image8, image, image_size);
 }
 
+KEEPALIVE
+uint8_t * machine_get_image(machine_t *machine) {
+	return machine->image8;
+}
+
 void machine_free(machine_t *machine) {
 	free(machine->image);
 	machine->image = NULL;
@@ -824,6 +854,7 @@ void machine_free(machine_t *machine) {
 	free(machine);
 }
 
+KEEPALIVE
 int machine_run(machine_t *machine) {
 	while (1) {
 		if (machine->halt) {
@@ -903,6 +934,7 @@ void machine_readregs(machine_t *machine, uint32_t *regs, size_t num) {
 	}
 }
 
+KEEPALIVE
 uint32_t machine_readreg(machine_t *machine, size_t reg) {
 	if (reg >= sizeof(machine->regs) / sizeof(machine->regs[0])) {
 		return 0;
