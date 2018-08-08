@@ -206,6 +206,25 @@ static void machine_sub_backtrace(machine_t *machine) {
 	machine->call_depth--;
 }
 
+static int machine_instr_push(machine_t *machine, uint32_t *reg, uint32_t reg_list) {
+	for (int i = 14; i >= 0; i--) {
+		if (reg_list & (1 << i)) {
+			*reg -= 4;
+			if (reg == &machine->sp) {
+				if (i == 14) {
+					machine_log(machine, LOG_CALLS, "%*spush lr      (sp: %x) (lr: %x)\n", machine->call_depth * 2, "", machine->sp, machine->lr + 2);
+				} else {
+					machine_log(machine, LOG_CALLS, "%*spush r%d      (sp: %x)\n", machine->call_depth * 2, "", i, machine->sp);
+				}
+			}
+			if (machine_transfer(machine, *reg, STORE, &machine->regs[i], WIDTH_32, false)) {
+				return ERR_MEM;
+			}
+		}
+	}
+	return 0;
+}
+
 static uint32_t machine_instr_adds(machine_t *machine, uint32_t a, uint32_t b) {
 	uint32_t result = a + b;
 	int64_t result64s = (int64_t)(int32_t)a + (int64_t)(int32_t)b;
@@ -661,7 +680,7 @@ int machine_step(machine_t *machine) {
 
 	} else if ((instruction >> 12) == 0b1011 && ((instruction >> 9) & 0b11) == 0b10) { // 1011x10
 		// Format 14: push/pop registers
-		uint8_t  reg_list   = (instruction >> 0) & 0xff;
+		uint32_t reg_list   = (instruction >> 0) & 0xff;
 		bool     flag_load  = (instruction >> 11) & 0b1;
 		bool     flag_pc_lr = (instruction >> 8) & 0b1; // store LR / load PC
 		if (flag_load) { // POP
@@ -685,20 +704,11 @@ int machine_step(machine_t *machine) {
 			}
 		} else { // PUSH
 			if (flag_pc_lr) {
-				*sp -= 4;
-				machine_log(machine, LOG_CALLS, "%*spush lr      (sp: %x) (lr: %x)\n", machine->call_depth * 2, "", *sp, *lr + 2);
-				if (machine_transfer(machine, *sp, STORE, lr, WIDTH_32, false)) {
-					return ERR_MEM;
-				}
+				reg_list |= (1 << 14); // LR
 			}
-			for (int i = 7; i >= 0; i--) {
-				if (reg_list & (1 << i)) {
-					*sp -= 4;
-					machine_log(machine, LOG_CALLS, "%*spush r%d      (sp: %x)\n", machine->call_depth * 2, "", i, *sp);
-					if (machine_transfer(machine, *sp, STORE, &machine->regs[i], WIDTH_32, false)) {
-						return ERR_MEM;
-					}
-				}
+			int err = machine_instr_push(machine, sp, reg_list);
+			if (err != 0) {
+				return err;
 			}
 		}
 
