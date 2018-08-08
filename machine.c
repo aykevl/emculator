@@ -213,6 +213,7 @@ static int machine_instr_push(machine_t *machine, uint32_t *reg, uint32_t reg_li
 			if (reg == &machine->sp) {
 				if (i == 14) {
 					machine_log(machine, LOG_CALLS, "%*spush lr      (sp: %x) (lr: %x)\n", machine->call_depth * 2, "", machine->sp, machine->lr + 2);
+					machine_add_backtrace(machine, machine->pc - 3);
 				} else {
 					machine_log(machine, LOG_CALLS, "%*spush r%d      (sp: %x)\n", machine->call_depth * 2, "", i, machine->sp);
 				}
@@ -220,6 +221,26 @@ static int machine_instr_push(machine_t *machine, uint32_t *reg, uint32_t reg_li
 			if (machine_transfer(machine, *reg, STORE, &machine->regs[i], WIDTH_32, false)) {
 				return ERR_MEM;
 			}
+		}
+	}
+	return 0;
+}
+
+static int machine_instr_pop(machine_t *machine, uint32_t *reg, uint32_t reg_list) {
+	for (int i = 0; i <= 15; i++) {
+		if (reg_list & (1 << i)) {
+			if (reg == &machine->sp) {
+				if (i == 15) {
+					machine_log(machine, LOG_CALLS, "%*sPOP pc %5x (sp: %x)\n", machine->call_depth * 2, "", machine->pc - 1, machine->sp);
+					machine_sub_backtrace(machine);
+				} else {
+					machine_log(machine, LOG_CALLS, "%*spop r%d       (sp: %x)\n", machine->call_depth * 2, "", i, machine->sp);
+				}
+			}
+			if (machine_transfer(machine, *reg, LOAD, &machine->regs[i], WIDTH_32, false)) {
+				return ERR_MEM;
+			}
+			*reg += 4;
 		}
 	}
 	return 0;
@@ -698,23 +719,12 @@ int machine_step(machine_t *machine) {
 		bool     flag_load  = (instruction >> 11) & 0b1;
 		bool     flag_pc_lr = (instruction >> 8) & 0b1; // store LR / load PC
 		if (flag_load) { // POP
-			for (int i = 0; i < 8; i++) {
-				if (reg_list & (1 << i)) {
-					machine_log(machine, LOG_CALLS, "%*spop r%d       (sp: %x)\n", machine->call_depth * 2, "", i, *sp);
-					if (machine_transfer(machine, *sp, LOAD, &machine->regs[i], WIDTH_32, false)) {
-						return ERR_MEM;
-					}
-					*sp += 4;
-				}
-			}
 			if (flag_pc_lr) {
-				uint32_t old_pc = *pc;
-				if (machine_transfer(machine, *sp, LOAD, pc, WIDTH_32, false)) {
-					return ERR_MEM;
-				}
-				machine_log(machine, LOG_CALLS, "%*sPOP pc %5x (sp: %x) <- %5x\n", machine->call_depth * 2, "", old_pc - 3, *sp, *pc - 1);
-				machine_sub_backtrace(machine);
-				*sp += 4;
+				reg_list |= (1 << 15); // PC
+			}
+			int err = machine_instr_pop(machine, sp, reg_list);
+			if (err != 0) {
+				return err;
 			}
 		} else { // PUSH
 			if (flag_pc_lr) {
