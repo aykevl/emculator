@@ -225,6 +225,46 @@ static int machine_instr_push(machine_t *machine, uint32_t *reg, uint32_t reg_li
 	return 0;
 }
 
+static uint32_t machine_instr_lsl(machine_t *machine, uint32_t src, uint32_t shift, bool setflags) {
+	if (setflags && shift != 0) { // range 0..31, setflags only when shifting non-zero amount
+		machine->psr.c = src >> (32 - shift) & 1;
+	}
+	if (shift >= 32) {
+		return 0;
+	}
+	return src << shift;
+}
+
+static uint32_t machine_instr_lsr(machine_t *machine, uint32_t src, uint32_t shift, bool setflags) {
+	if (shift >= 32) {
+		if (setflags) {
+			machine->psr.c = (src >> 31) & 1;
+		}
+		return 0;
+	}
+	if (shift != 0 && setflags) {
+		machine->psr.c = src >> (shift - 1) & 1;
+	}
+	return src >> shift;
+}
+
+static uint32_t machine_instr_asr(machine_t *machine, uint32_t src, uint32_t shift, bool setflags) {
+	if (shift >= 32) {
+		if (setflags) {
+			machine->psr.c = (((int32_t)src) >> 31) & 1;
+		}
+		// shift twice to avoid undefined behavior in the C compiler
+		return (((int32_t)src) >> 16) >> 16;
+	} else if (shift >= 0) {
+		if (setflags) {
+			machine->psr.c = ((int32_t)src) >> (shift - 1) & 1;
+		}
+		return ((int32_t)src) >> shift;
+	} else {
+		return src;
+	}
+}
+
 static uint32_t machine_instr_adds(machine_t *machine, uint32_t a, uint32_t b) {
 	uint32_t result = a + b;
 	int64_t result64s = (int64_t)(int32_t)a + (int64_t)(int32_t)b;
@@ -351,28 +391,11 @@ int machine_step(machine_t *machine) {
 			// Format 1: move shifted register
 			uint32_t offset5 = (instruction >> 6) & 0x1f;
 			if (op == 0) { // LSLS
-				if (offset5 != 0) { // range 0..31
-					machine->psr.c = *reg_src >> (32 - offset5) & 1;
-				}
-				*reg_dst = *reg_src << offset5;
+				*reg_dst = machine_instr_lsl(machine, *reg_src, offset5, true);
 			} else if (op == 1) { // LSRS
-				if (offset5 == 0) {
-					machine->psr.c = (*reg_src >> 31) & 1;
-					// shift twice to avoid undefined behavior in the C compiler
-					*reg_dst = 0;
-				} else {
-					machine->psr.c = *reg_src >> (offset5 - 1) & 1;
-					*reg_dst = *reg_src >> offset5;
-				}
+				*reg_dst = machine_instr_lsr(machine, *reg_src, offset5 == 0 ? 32 : offset5 , true);
 			} else if (op == 2) { // ASRS
-				if (offset5 == 0) { // right shift by 32
-					machine->psr.c = (((int32_t)*reg_src) >> 31) & 1;
-					// shift twice to avoid undefined behavior in the C compiler
-					*reg_dst = (((int32_t)*reg_src) >> 31) >> 1;
-				} else {
-					machine->psr.c = ((int32_t)*reg_src) >> (offset5 - 1) & 1;
-					*reg_dst = ((int32_t)*reg_src) >> offset5;
-				}
+				*reg_dst = machine_instr_asr(machine, *reg_src, offset5 == 0 ? 32 : offset5 , true);
 			}
 		} else { // op == 3
 			// Format 2: add/subtract
@@ -425,28 +448,11 @@ int machine_step(machine_t *machine) {
 		} else if (op == 0b0001) { // EORS
 			*reg_dst ^= *reg_src;
 		} else if (op == 0b0010) { // LSLS
-			if (*reg_src != 0) {
-				machine->psr.c = *reg_dst >> (32 - *reg_src) & 1;
-			}
-			*reg_dst <<= *reg_src;
+			*reg_dst = machine_instr_lsl(machine, *reg_dst, *reg_src & 0xff, true);
 		} else if (op == 0b0011) { // LSRS
-			uint8_t shiftlen = *reg_src & 0xff;
-			if (shiftlen >= 32) {
-				machine->psr.c = (*reg_dst >> 31) & 1;
-				*reg_dst = 0;
-			} else if (shiftlen > 0) { // 1..31
-				machine->psr.c = *reg_dst >> (shiftlen - 1) & 1;
-				*reg_dst >>= shiftlen;
-			}
+			*reg_dst = machine_instr_lsr(machine, *reg_dst, *reg_src & 0xff, true);
 		} else if (op == 0b0100) { // ASRS
-			uint8_t shiftlen = *reg_src & 0xff;
-			if (shiftlen >= 32) {
-				*(int32_t*)reg_dst = ((*(int32_t*)reg_dst) >> 16) >> 16;
-				machine->psr.c = (((int32_t)*reg_dst) >> 31) & 1;
-			} else if (shiftlen > 0) { // 1..31
-				*(int32_t*)reg_dst >>= shiftlen;
-				machine->psr.c = (((int32_t)*reg_dst) >> (shiftlen - 1)) & 1;
-			}
+			*reg_dst = machine_instr_asr(machine, *reg_dst, *reg_src & 0xff, true);
 		} else if (op == 0b0101) { // ADCS
 			*reg_dst = machine_instr_adcs(machine, *reg_dst, *reg_src);
 		} else if (op == 0b0110) { // SBCS
