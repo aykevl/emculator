@@ -265,47 +265,55 @@ static uint32_t machine_instr_asr(machine_t *machine, uint32_t src, uint32_t shi
 	}
 }
 
-static uint32_t machine_instr_adds(machine_t *machine, uint32_t a, uint32_t b) {
+static uint32_t machine_instr_add(machine_t *machine, uint32_t a, uint32_t b, bool setflags) {
 	uint32_t result = a + b;
-	int64_t result64s = (int64_t)(int32_t)a + (int64_t)(int32_t)b;
-	uint64_t result64u = (uint64_t)a + (uint64_t)b;
-	machine->psr.n = (int32_t)result < 0;
-	machine->psr.z = result == 0;
-	machine->psr.c = result64u >= ((uint64_t)1 << 32); // true if 32-bit overflow
-	machine->psr.v = ((int32_t)result < 0) != (result64s < 0);
+	if (setflags) {
+		int64_t result64s = (int64_t)(int32_t)a + (int64_t)(int32_t)b;
+		uint64_t result64u = (uint64_t)a + (uint64_t)b;
+		machine->psr.n = (int32_t)result < 0;
+		machine->psr.z = result == 0;
+		machine->psr.c = result64u >= ((uint64_t)1 << 32); // true if 32-bit overflow
+		machine->psr.v = ((int32_t)result < 0) != (result64s < 0);
+	}
 	return result;
 }
 
-static uint32_t machine_instr_adcs(machine_t *machine, uint32_t a, uint32_t b) {
+static uint32_t machine_instr_adc(machine_t *machine, uint32_t a, uint32_t b, bool setflags) {
 	uint32_t result = a + b + machine->psr.c;
-	int64_t result64s = (int64_t)(int32_t)a + (int64_t)(int32_t)b + machine->psr.c;
-	uint64_t result64u = (uint64_t)a + (uint64_t)b + machine->psr.c;
-	machine->psr.n = (int32_t)result < 0;
-	machine->psr.z = result == 0;
-	machine->psr.c = result64u >= ((uint64_t)1 << 32); // true if 32-bit overflow
-	machine->psr.v = ((int32_t)result < 0) != (result64s < 0);
+	if (setflags) {
+		int64_t result64s = (int64_t)(int32_t)a + (int64_t)(int32_t)b + machine->psr.c;
+		uint64_t result64u = (uint64_t)a + (uint64_t)b + machine->psr.c;
+		machine->psr.n = (int32_t)result < 0;
+		machine->psr.z = result == 0;
+		machine->psr.c = result64u >= ((uint64_t)1 << 32); // true if 32-bit overflow
+		machine->psr.v = ((int32_t)result < 0) != (result64s < 0);
+	}
 	return result;
 }
 
-static uint32_t machine_instr_subs(machine_t *machine, uint32_t a, uint32_t b) {
+static uint32_t machine_instr_sub(machine_t *machine, uint32_t a, uint32_t b, bool setflags) {
 	uint32_t result = a - b;
-	int64_t result64s = (int64_t)(int32_t)a - (int64_t)(int32_t)b;
-	uint64_t result64u = (uint64_t)a - (uint64_t)b;
-	machine->psr.n = (int32_t)result < 0;
-	machine->psr.z = result == 0;
-	machine->psr.c = (int64_t)result64u >= 0;
-	machine->psr.v = ((int32_t)result < 0) != (result64s < 0);
+	if (setflags) {
+		int64_t result64s = (int64_t)(int32_t)a - (int64_t)(int32_t)b;
+		uint64_t result64u = (uint64_t)a - (uint64_t)b;
+		machine->psr.n = (int32_t)result < 0;
+		machine->psr.z = result == 0;
+		machine->psr.c = (int64_t)result64u >= 0;
+		machine->psr.v = ((int32_t)result < 0) != (result64s < 0);
+	}
 	return result;
 }
 
-static uint32_t machine_instr_sbcs(machine_t *machine, uint32_t a, uint32_t b) {
+static uint32_t machine_instr_sbc(machine_t *machine, uint32_t a, uint32_t b, bool setflags) {
 	uint32_t result = a - b - !machine->psr.c;
-	int64_t result64s = (int64_t)(int32_t)a - (int64_t)(int32_t)b - !machine->psr.c;
-	int64_t result64u = (uint64_t)a - (uint64_t)b - !machine->psr.c;
-	machine->psr.n = (int32_t)result < 0;
-	machine->psr.z = result == 0;
-	machine->psr.c = (int64_t)result64u >= 0;
-	machine->psr.v = ((int32_t)result < 0) != (result64s < 0);
+	if (setflags) {
+		int64_t result64s = (int64_t)(int32_t)a - (int64_t)(int32_t)b - !machine->psr.c;
+		int64_t result64u = (uint64_t)a - (uint64_t)b - !machine->psr.c;
+		machine->psr.n = (int32_t)result < 0;
+		machine->psr.z = result == 0;
+		machine->psr.c = (int64_t)result64u >= 0;
+		machine->psr.v = ((int32_t)result < 0) != (result64s < 0);
+	}
 	return result;
 }
 
@@ -406,9 +414,9 @@ int machine_step(machine_t *machine) {
 				value = machine->regs[value];
 			}
 			if (op == 0) { // ADDS
-				*reg_dst = machine_instr_adds(machine, *reg_src, value);
+				*reg_dst = machine_instr_add(machine, *reg_src, value, true);
 			} else { // SUBS
-				*reg_dst = machine_instr_subs(machine, *reg_src, value);
+				*reg_dst = machine_instr_sub(machine, *reg_src, value, true);
 			}
 		}
 		machine->psr.n = (int32_t)*reg_dst < 0;
@@ -424,13 +432,13 @@ int machine_step(machine_t *machine) {
 			*reg = imm;
 		} else if (op == 1) { // CMP
 			// Update flags as if doing *reg - imm
-			machine_instr_subs(machine, *reg, imm);
+			machine_instr_sub(machine, *reg, imm, true);
 			set_cc = false;
 			// Don't update *reg
 		} else if (op == 2) { // ADDS
-			*reg = machine_instr_adds(machine, *reg, imm);
+			*reg = machine_instr_add(machine, *reg, imm, true);
 		} else if (op == 3) { // SUBS
-			*reg = machine_instr_subs(machine, *reg, imm);
+			*reg = machine_instr_sub(machine, *reg, imm, true);
 		}
 		if (set_cc) {
 			machine->psr.n = (int32_t)*reg < 0;
@@ -454,19 +462,19 @@ int machine_step(machine_t *machine) {
 		} else if (op == 0b0100) { // ASRS
 			*reg_dst = machine_instr_asr(machine, *reg_dst, *reg_src & 0xff, true);
 		} else if (op == 0b0101) { // ADCS
-			*reg_dst = machine_instr_adcs(machine, *reg_dst, *reg_src);
+			*reg_dst = machine_instr_adc(machine, *reg_dst, *reg_src, true);
 		} else if (op == 0b0110) { // SBCS
-			*reg_dst = machine_instr_sbcs(machine, *reg_dst, *reg_src);
+			*reg_dst = machine_instr_sbc(machine, *reg_dst, *reg_src, true);
 		} else if (op == 0b1000) { // TST
 			// set CC on Rd AND Rs
 			machine->psr.n = (int32_t)(*reg_src & *reg_dst) < 0;
 			machine->psr.z = (int32_t)(*reg_src & *reg_dst) == 0;
 			set_cc = false;
 		} else if (op == 0b1001) { // NEG / RSBS
-			*reg_dst = machine_instr_subs(machine, 0, *reg_src);
+			*reg_dst = machine_instr_sub(machine, 0, *reg_src, true);
 		} else if (op == 0b1010) { // CMP
 			// set CC on Rd - Rs
-			machine_instr_subs(machine, *reg_dst, *reg_src);
+			machine_instr_sub(machine, *reg_dst, *reg_src, true);
 			set_cc = false;
 		} else if (op == 0b1100) { // ORRS
 			// does not update C or V
@@ -518,7 +526,7 @@ int machine_step(machine_t *machine) {
 				*reg_dst += *reg_src;
 			} else if (op == 1) { // CMP
 				// set CC on Rd - Rs
-				machine_instr_subs(machine, *reg_dst, *reg_src);
+				machine_instr_sub(machine, *reg_dst, *reg_src, true);
 			} else if (op == 2) { // MOV
 				*reg_dst = *reg_src;
 				if (reg_dst == pc) {
