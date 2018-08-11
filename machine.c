@@ -1565,7 +1565,7 @@ int machine_run(machine_t *machine) {
 				machine_log(machine, LOG_ERROR, "\nERROR: unknown error: %d\n", err);
 				break;
 		}
-		if (err != 0 && err != ERR_BREAK) {
+		if (err != 0) {
 			if (machine_loglevel(machine) < LOG_INSTRS) { // don't double-log
 				machine_print_registers(machine);
 			}
