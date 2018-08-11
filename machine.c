@@ -19,6 +19,7 @@ void *wasm_malloc(size_t size);
 #define malloc wasm_malloc
 #define calloc(size, nmemb) wasm_malloc(size * nmemb)
 
+#define machine_versioncheck(machine, core) (false)
 #define machine_loglevel(machine) (0)
 #define machine_log(machine, level, ...) ((false) ? fprintf(stderr, __VA_ARGS__) : 0)
 
@@ -29,6 +30,7 @@ void *wasm_malloc(size_t size);
 #include <stdio.h>
 
 // TODO: make this configurable
+#define machine_versioncheck(machine, core) (true)
 #define machine_loglevel(machine) (machine->loglevel)
 #define machine_log(machine, level, ...) ((machine->loglevel >= level) ? fprintf(stderr, __VA_ARGS__) : 0)
 
@@ -46,14 +48,21 @@ static int machine_transfer(machine_t *machine, uint32_t address, transfer_type_
 		// code: 0x00000000 .. 0x1fffffff
 		if (region_address < machine->image_size) {
 			ptr = &machine->image8[region_address];
+		} else if (transfer_type == LOAD && address == 0x10000130) {
+			*reg = 0; // undocumented, but somewhere in FICR
+			return 0;
+		} else if (address == 0x10001200) {
+			ptr = &machine->uicr.pselreset[0];
+		} else if (address == 0x10001204) {
+			ptr = &machine->uicr.pselreset[1];
 		}
-		if (transfer_type == STORE) {
+		if (transfer_type == STORE && ptr != NULL) {
 			if ((address & 3) != 0 || width != WIDTH_32) {
-				machine_log(machine, LOG_ERROR, "ERROR: unaligned write to read-only memory (PC: %x)\n", machine->pc - 3);
+				machine_log(machine, LOG_ERROR, "ERROR: unaligned write to read-only memory (PC: %x, ptr: 0x%x)\n", machine->pc - 3, address);
 				return ERR_MEM;
 			}
 			if (!machine->image_writable) {
-				machine_log(machine, LOG_ERROR, "ERROR: write to read-only memory (PC: %x)\n", machine->pc - 3);
+				machine_log(machine, LOG_ERROR, "ERROR: write to read-only memory (PC: %x, ptr: 0x%x)\n", machine->pc - 3, address);
 				return ERR_MEM;
 			}
 
@@ -117,10 +126,6 @@ static int machine_transfer(machine_t *machine, uint32_t address, transfer_type_
 		return 0;
 	} else if (region == 7) {
 		// Private peripheral bus + Device: 0xe0000000 .. 0xffffffff
-		if ((address & 3) != 0) {
-			machine_log(machine, LOG_ERROR, "\nERROR: invalid device/private address: 0x%08x\n", address);
-			return ERR_MEM;
-		}
 		if (address == 0xe000e100 && transfer_type == STORE) {
 			// NVIC Interrupt Set-enable Register
 			machine_log(machine, LOG_WARN, "set interrupts: %08x\n", *reg);
@@ -131,8 +136,11 @@ static int machine_transfer(machine_t *machine, uint32_t address, transfer_type_
 			machine_log(machine, LOG_WARN, "clear interrupts: %08x\n", *reg);
 			return 0;
 		}
+		if (address == 0xe000ed88) {
+			ptr = &machine->scb.cpacr;
+		}
 		if ((address & 0xfffffff0) == 0xe000e400) {
-			ptr = &machine->nvic.ip[(address / 4) % 8];
+			ptr = &machine->nvic.ip[address % 32];
 		}
 		if ((address & 0xfffffff0) == 0xf0000fe0 && transfer_type == LOAD) {
 			machine_log(machine, LOG_WARN, "private address: %x\n", address);
@@ -151,7 +159,10 @@ static int machine_transfer(machine_t *machine, uint32_t address, transfer_type_
 			machine_log(machine, LOG_ERROR, "\nERROR: invalid store address: 0x%08x (PC: %x, value: %x)\n", address, machine->pc - 3, *reg);
 		}
 		return ERR_MEM;
-	} else if ((width == WIDTH_16 && (address & 1) != 0) || (width == WIDTH_32 && (address & 3) != 0)) {
+	} else if (((width == WIDTH_16 && (address & 1) != 0) || (width == WIDTH_32 && (address & 3) != 0))
+			&& !machine_versioncheck(machine, CORTEX_M4)) {
+		// Note: Cortex-M4 supports unaligned memory accesses when
+		// enabled.
 		machine_log(machine, LOG_ERROR, "\nERROR: unaligned %s address: 0x%08x (PC: %x)\n", transfer_type == LOAD ? "load" : "store", address, machine->pc - 3);
 		return ERR_MEM;
 	}
@@ -410,6 +421,88 @@ static int machine_condition(machine_t *machine, uint32_t condition) {
 	}
 }
 
+// ALU operations for Thumb-2, which are used in two different instruction
+// formats.
+static int machine_alu_op(machine_t *machine, uint32_t op, uint32_t *reg_dst, uint32_t *reg_src, uint32_t value, bool setflags) {
+	if (op == 0b0000) {
+		uint32_t result = *reg_src & value;
+		if (reg_dst == &machine->pc && setflags) {
+			// TST
+			machine->psr.n = (int32_t)result < 0;
+			machine->psr.z = result == 0;
+			setflags = false;
+		} else {
+			// AND
+			*reg_dst = result;
+		}
+	} else if (op == 0b0001) {
+		// BIC
+		*reg_dst = *reg_src & ~value; // AND NOT
+	} else if (op == 0b0010) {
+		if (reg_src == &machine->pc) {
+			// MOV
+			*reg_dst = value;
+		} else {
+			// ORR
+			*reg_dst = *reg_src | value;
+		}
+	} else if (op == 0b0011) {
+		if (reg_src == &machine->pc) {
+			// MVN
+			*reg_dst = ~value;
+		} else {
+			// ORN
+			*reg_dst = *reg_src | ~value;
+		}
+	} else if (op == 0b0100) {
+		uint32_t result = *reg_src ^ value;
+		if (reg_dst == &machine->pc && setflags) {
+			// TEQ
+			machine->psr.n = (int32_t)result < 0;
+			machine->psr.z = result == 0;
+			setflags = false;
+		} else {
+			// EOR
+			*reg_dst = result;
+		}
+	} else if (op == 0b1000) {
+		if (reg_dst == &machine->pc && setflags) {
+			// CMN
+			machine_instr_add(machine, *reg_src, value, true);
+			setflags = false;
+		} else {
+			// ADD
+			*reg_dst = machine_instr_add(machine, *reg_src, value, setflags);
+		}
+	} else if (op == 0b1010) {
+		// ADC
+		*reg_dst = machine_instr_adc(machine, *reg_src, value, setflags);
+	} else if (op == 0b1110) {
+		// RSB
+		*reg_dst = machine_instr_sub(machine, value, *reg_src, setflags);
+	} else if (op == 0b1101) {
+		if (reg_dst == &machine->pc && setflags) {
+			// CMP
+			machine_instr_sub(machine, *reg_src, value, true);
+			setflags = false;
+		} else {
+			// SUB
+			*reg_dst = machine_instr_sub(machine, *reg_src, value, setflags);
+		}
+	} else {
+		return ERR_UNDEFINED;
+	}
+	if (setflags) {
+		machine->psr.n = (int32_t)*reg_dst < 0;
+		machine->psr.z = *reg_dst == 0;
+	}
+	return ERR_OK;
+}
+
+static bool machine_is_32bit_instruction(uint16_t instruction) {
+	return ((instruction >> 11) == 0b11101 || (instruction >> 12) == 0b1111);
+}
+
 int machine_step(machine_t *machine) {
 	// Some handy aliases
 	uint32_t *pc = &machine->pc; // r15
@@ -437,21 +530,50 @@ int machine_step(machine_t *machine) {
 	// Increment PC to point to the next instruction.
 	*pc += 2;
 
+	bool inITBlock = machine_versioncheck(machine, CORTEX_M4) ? machine->psr.it2 != 0 : false;
+
+	if (inITBlock) {
+		// Check whether we need to execute the following instruction.
+		uint32_t state = machine->psr.it1 | (machine->psr.it2 << 2);
+		uint32_t condition = state >> 4;
+		uint32_t newstate = (state & 0b11100000) | ((state << 1) & 0b11111);
+		if ((newstate & 0b1111) == 0) {
+			newstate = 0;
+		}
+		machine->psr.it1 = newstate & 0b11;
+		machine->psr.it2 = newstate >> 2;
+		int result = machine_condition(machine, condition);
+		if (result < 0) {
+			return ERR_UNDEFINED;
+		}
+		if (!result) {
+			// Don't do anything.
+			// We could also have changed instruction to a nop.
+			if (machine_is_32bit_instruction(instruction)) {
+				*pc += 2;
+			}
+			return ERR_OK;
+		} else {
+			// Continue.
+		}
+	}
+
 	// Decode/execute instruction
 
 	if ((instruction >> 13) == 0b000) {
 		uint32_t *reg_dst = &machine->regs[(instruction >> 0) & 0b111];
 		uint32_t *reg_src = &machine->regs[(instruction >> 3) & 0b111];
 		uint32_t op       = (instruction >> 11)  & 0b11;
+		bool setflags = !inITBlock;
 		if (op != 3) {
 			// Format 1: move shifted register
 			uint32_t offset5 = (instruction >> 6) & 0x1f;
 			if (op == 0) { // LSLS
-				*reg_dst = machine_instr_lsl(machine, *reg_src, offset5, true);
+				*reg_dst = machine_instr_lsl(machine, *reg_src, offset5, setflags);
 			} else if (op == 1) { // LSRS
-				*reg_dst = machine_instr_lsr(machine, *reg_src, offset5 == 0 ? 32 : offset5 , true);
+				*reg_dst = machine_instr_lsr(machine, *reg_src, offset5 == 0 ? 32 : offset5, setflags);
 			} else if (op == 2) { // ASRS
-				*reg_dst = machine_instr_asr(machine, *reg_src, offset5 == 0 ? 32 : offset5 , true);
+				*reg_dst = machine_instr_asr(machine, *reg_src, offset5 == 0 ? 32 : offset5, setflags);
 			}
 		} else { // op == 3
 			// Format 2: add/subtract
@@ -462,20 +584,22 @@ int machine_step(machine_t *machine) {
 				value = machine->regs[value];
 			}
 			if (op == 0) { // ADDS
-				*reg_dst = machine_instr_add(machine, *reg_src, value, true);
+				*reg_dst = machine_instr_add(machine, *reg_src, value, setflags);
 			} else { // SUBS
-				*reg_dst = machine_instr_sub(machine, *reg_src, value, true);
+				*reg_dst = machine_instr_sub(machine, *reg_src, value, setflags);
 			}
 		}
-		machine->psr.n = (int32_t)*reg_dst < 0;
-		machine->psr.z = *reg_dst == 0;
+		if (setflags) {
+			machine->psr.n = (int32_t)*reg_dst < 0;
+			machine->psr.z = *reg_dst == 0;
+		}
 
 	} else if ((instruction >> 13) == 0b001) {
 		// Format 3: move/compare/add/subtract immediate
 		uint32_t  imm  = instruction & 0xff;
 		uint32_t *reg = &machine->regs[(instruction >> 8)  & 0b111];
 		size_t   op   = (instruction >> 11) & 0b11;
-		bool setflags = true;
+		bool setflags = !inITBlock;
 		if (op == 0) { // MOVS
 			*reg = imm;
 		} else if (op == 1) { // CMP
@@ -484,9 +608,9 @@ int machine_step(machine_t *machine) {
 			setflags = false;
 			// Don't update *reg
 		} else if (op == 2) { // ADDS
-			*reg = machine_instr_add(machine, *reg, imm, true);
+			*reg = machine_instr_add(machine, *reg, imm, setflags);
 		} else if (op == 3) { // SUBS
-			*reg = machine_instr_sub(machine, *reg, imm, true);
+			*reg = machine_instr_sub(machine, *reg, imm, setflags);
 		}
 		if (setflags) {
 			machine->psr.n = (int32_t)*reg < 0;
@@ -498,28 +622,28 @@ int machine_step(machine_t *machine) {
 		uint32_t *reg_dst = &machine->regs[(instruction >> 0) & 0b111];
 		uint32_t *reg_src = &machine->regs[(instruction >> 3) & 0b111];
 		uint32_t op       = (instruction >> 6) & 0b1111;
-		bool setflags = true;
+		bool setflags = !inITBlock;
 		if (op == 0b0000) { // ANDS
 			*reg_dst &= *reg_src;
 		} else if (op == 0b0001) { // EORS
 			*reg_dst ^= *reg_src;
 		} else if (op == 0b0010) { // LSLS
-			*reg_dst = machine_instr_lsl(machine, *reg_dst, *reg_src & 0xff, true);
+			*reg_dst = machine_instr_lsl(machine, *reg_dst, *reg_src & 0xff, setflags);
 		} else if (op == 0b0011) { // LSRS
-			*reg_dst = machine_instr_lsr(machine, *reg_dst, *reg_src & 0xff, true);
+			*reg_dst = machine_instr_lsr(machine, *reg_dst, *reg_src & 0xff, setflags);
 		} else if (op == 0b0100) { // ASRS
-			*reg_dst = machine_instr_asr(machine, *reg_dst, *reg_src & 0xff, true);
+			*reg_dst = machine_instr_asr(machine, *reg_dst, *reg_src & 0xff, setflags);
 		} else if (op == 0b0101) { // ADCS
-			*reg_dst = machine_instr_adc(machine, *reg_dst, *reg_src, true);
+			*reg_dst = machine_instr_adc(machine, *reg_dst, *reg_src, setflags);
 		} else if (op == 0b0110) { // SBCS
-			*reg_dst = machine_instr_sbc(machine, *reg_dst, *reg_src, true);
+			*reg_dst = machine_instr_sbc(machine, *reg_dst, *reg_src, setflags);
 		} else if (op == 0b1000) { // TST
 			// set CC on Rd AND Rs
 			machine->psr.n = (int32_t)(*reg_src & *reg_dst) < 0;
 			machine->psr.z = (int32_t)(*reg_src & *reg_dst) == 0;
 			setflags = false;
 		} else if (op == 0b1001) { // NEG / RSBS
-			*reg_dst = machine_instr_sub(machine, 0, *reg_src, true);
+			*reg_dst = machine_instr_sub(machine, 0, *reg_src, setflags);
 		} else if (op == 0b1010) { // CMP
 			// set CC on Rd - Rs
 			machine_instr_sub(machine, *reg_dst, *reg_src, true);
@@ -720,6 +844,18 @@ int machine_step(machine_t *machine) {
 			*reg_dst = *reg_src & 0xff;
 		}
 
+	} else if (((instruction >> 8) & 0b11110101) == 0b10110001 && machine_versioncheck(machine, CORTEX_M4)) {
+		// T1: CBZ / CBNZ (compare and branch on [non-]zero)
+		// Note: the previous two instruction encodings (sign/zero extend,
+		// add sp) must be before this instruction.
+		uint32_t *reg = &machine->regs[(instruction >> 0) & 0b111];
+		uint32_t imm5 = (instruction >> 3) & 0b11111;
+		uint32_t flag_i  = ((instruction >> 9) & 0b1);
+		bool flag_nz = ((instruction >> 11) & 0b1);
+		if ((*reg == 0) == !flag_nz) {
+			*pc += (flag_i << 6) + (imm5 << 1) + 2;
+		}
+
 	} else if ((instruction >> 8) == 0b10111010) {
 		// T1: Reverse bytes
 		uint32_t *reg_dst = &machine->regs[(instruction >> 0) & 0b111];
@@ -745,6 +881,19 @@ int machine_step(machine_t *machine) {
 			machine->loglevel = LOG_INSTRS;
 		} else {
 			return ERR_BREAK;
+		}
+
+	} else if ((instruction >> 8) == 0b10111111 && machine_versioncheck(machine, CORTEX_M4)) {
+		uint32_t firstcond = (instruction >> 4) & 0b1111;
+		uint32_t mask      = (instruction >> 0) & 0b1111;
+		if (mask == 0b0000) {
+			// NOP-compatible hints (NOP, YIELD, WFE, WFI, SEV, DBG).
+			// For now, ignore. TODO: implement WFE/WFI.
+		} else {
+			// IT
+			uint32_t state = (firstcond << 4) | mask;
+			machine->psr.it1 = state & 0b11;
+			machine->psr.it2 = state >> 2;
 		}
 
 	} else if ((instruction >> 12) == 0b1011 && ((instruction >> 9) & 0b11) == 0b10) { // 1011x10
@@ -818,27 +967,487 @@ int machine_step(machine_t *machine) {
 		*pc += offset + 2;
 		machine_log(machine, LOG_CALLS, "%*sB    %7x (sp: %x) -> %x\n", machine->call_depth * 2, "", old_pc - 3, *sp, *pc - 1);
 
-	} else if ((instruction >> 12) == 0b1111) {
+	} else if ((instruction >> 11) == 0b11101 && machine_versioncheck(machine, CORTEX_M4)) {
 		// 32-bit instruction
-
 		uint16_t hw1 = instruction;
 		uint16_t hw2 = machine->image16[*pc/2];
 		*pc += 2;
-		if ((hw1 >> 11) == 0b11110 && (hw2 >> 11) == 0b11111) {
-			// BL
+
+		if (((hw1 >> 6) == 0b1110100100)) {
+			bool flag_load  = (hw1 >> 4) & 0b1;
+			bool flag_wback = (hw1 >> 5) & 0b1;
+			uint32_t *reg = &machine->regs[(hw1 >> 0) & 0b1111];
+			if (!flag_load) {
+				// STMDB
+				int err = machine_instr_stmdb(machine, reg, hw2, flag_wback);
+				if (err != 0) {
+					return err;
+				}
+			} else {
+				*pc -= 2; // undo 32-bit change
+				return ERR_UNDEFINED;
+			}
+
+		} else if ((hw1 >> 6) == 0b1110100010) {
+			bool flag_load  = (hw1 >> 4) & 0b1;
+			bool flag_wback = (hw1 >> 5) & 0b1;
+			uint32_t *reg = &machine->regs[(hw1 >> 0) & 0b1111];
+			if (flag_load) {
+				// LDMIA
+				int err = machine_instr_ldmia(machine, reg, hw2, flag_wback);
+				if (err != 0) {
+					return err;
+				}
+			} else {
+				// STMIA
+				int err = machine_instr_stmia(machine, reg, hw2, flag_wback);
+				if (err != 0) {
+					return err;
+				}
+			}
+
+		} else if (((hw1 >> 6) & 0b1111111001) == 0b1110100001) {
+			// Load/store double and exclusive, and table branch
+			bool     flag_load = (hw1 >> 4) & 0b1;
+			uint32_t *reg_src  = &machine->regs[(hw1 >> 0)  & 0b1111]; // Rn
+			if ((hw1 >> 5) == 0b11101000110) {
+				// Load/store exclusive byte, halfword, doubleword, and
+				// table branch.
+				uint32_t op        = (hw2 >> 4)  & 0b1111;
+				uint32_t *reg_src2 = &machine->regs[(hw2 >> 0)  & 0b1111]; // Rm
+				if (op == 0b0000 && flag_load) {
+					// TBB
+					uint32_t baseaddr = *reg_src;
+					if (reg_src == pc) {
+						baseaddr -= 1; // Thumb bit
+					}
+					uint32_t offset = *reg_src2;
+					uint32_t halfwords;
+					if (machine_transfer(machine, baseaddr + offset, LOAD, &halfwords, WIDTH_8, false)) {
+						return ERR_MEM;
+					}
+					*pc += halfwords << 1;
+				} else if (op == 0b0001 && flag_load) {
+					// TBH
+					uint32_t baseaddr = *reg_src;
+					if (reg_src == pc) {
+						baseaddr -= 1; // Thumb bit
+					}
+					uint32_t offset = *reg_src2 << 1;
+					uint32_t halfwords;
+					if (machine_transfer(machine, baseaddr + offset, LOAD, &halfwords, WIDTH_16, false)) {
+						return ERR_MEM;
+					}
+					*pc += halfwords << 1;
+				} else {
+					*pc -= 2;
+					return ERR_UNDEFINED;
+				}
+			} else {
+				*pc -= 2;
+				return ERR_UNDEFINED;
+			}
+
+		} else if ((hw1 >> 9) == 0b1110101) {
+			// Data processing instructions with constant shift
+			uint32_t op        = (hw1 >> 5) & 0b1111;
+			uint32_t flag_set  = (hw1 >> 4) & 0b1;
+			uint32_t *reg_dst  = &machine->regs[(hw2 >> 8) & 0b1111]; // Rd
+			uint32_t *reg_src  = &machine->regs[(hw1 >> 0) & 0b1111]; // Rn
+			uint32_t *reg_src2 = &machine->regs[(hw2 >> 0) & 0b1111]; // Rm
+			uint32_t imm3      = (hw2 >> 12) & 0b111;
+			uint32_t imm2      = (hw2 >> 6)  & 0b11;
+			uint32_t type      = (hw2 >> 4)  & 0b11;
+
+			uint32_t imm5 = (imm3 << 2) | imm2;
+			// DecodeImmShift(type, imm3:imm2)
+			// Shift(value, shift_t / type, shift_n / amount, APSR.C / carry_in)
+			uint32_t shifted;
+			switch (type) {
+				case 0b00: // LSL
+					shifted = machine_instr_lsl(machine, *reg_src2, imm5, flag_set);
+					break;
+				case 0b01: // LSR
+					shifted = machine_instr_lsr(machine, *reg_src2, imm5 == 0 ? 32 : imm5, flag_set);
+					break;
+				case 0b10: // ASR
+					shifted = machine_instr_asr(machine, *reg_src2, imm5 == 0 ? 32 : imm5, flag_set);
+					break;
+				case 0b11: // ROR, RRX
+					*pc -= 2; // undo 32-bit change
+					return ERR_UNDEFINED;
+			}
+
+			int err = machine_alu_op(machine, op, reg_dst, reg_src, shifted, flag_set);
+			if (err != ERR_OK) {
+				*pc -= 2;
+				return err;
+			}
+
+		} else {
+			*pc -= 2; // undo 32-bit change
+			return ERR_UNDEFINED;
+		}
+
+	} else if ((instruction >> 12) == 0b1111) {
+		// 32-bit instruction
+		uint16_t hw1 = instruction;
+		uint16_t hw2 = machine->image16[*pc/2];
+		*pc += 2;
+
+		if ((hw1 >> 11) == 0b11110 && (hw2 >> 15) == 0b0 && machine_versioncheck(machine, CORTEX_M4)) {
+			// Data processing instructions: immediate, including bitfield
+			// and saturate
+			uint32_t imm3 = (hw2 >> 12) & 0b111;
+			uint32_t *reg_dst = &machine->regs[(hw2 >> 8) & 0b1111]; // Rd
+			uint32_t *reg_src = &machine->regs[(hw1 >> 0) & 0b1111]; // Rn
+
+			if (((hw1 >> 9) & 0b1) == 0b0) {
+				// Data processing with modified 12-bit immediate
+				uint32_t bit_i    = (hw1 >> 10) & 0b1;
+				uint32_t op       = (hw1 >> 5) & 0b1111;
+				bool     flag_set = (hw1 >> 4) & 0b1;
+				uint32_t imm8     = (hw2 >> 0) & 0xff;
+				uint32_t imm12 = imm8 | (imm3 << 8) | (bit_i << 11);
+
+				// ThumbExpandImmWithC()
+				uint32_t imm32;
+				if ((imm12 >> 10) == 0b00) {
+					uint32_t imm8 = imm12 & 0xff;
+					switch ((imm12 >> 8) & 0b11) {
+						case 0b00:
+							imm32 = imm8;
+							break;
+						case 0b01:
+							imm32 = (imm8 << 16) | imm8;
+							break;
+						case 0b10:
+							imm32 = (imm8 << 24) | (imm8 << 8);
+							break;
+						case 0b11:
+							imm32 = (imm8 << 24) | (imm8 << 16) | (imm8 << 8) | imm8;
+							break;
+					}
+				} else {
+					uint32_t unrotated_value = 0x80 | (imm8 & 0x7f);
+					uint32_t n = imm12 >> 7;
+					// ROR_C(unrotated_value aka x, n)
+					imm32 = n == 0 ? unrotated_value : ((unrotated_value >> n) | (unrotated_value << (32 - n)));
+					if (flag_set) {
+						machine->psr.c = imm32 >> 31;
+					}
+				}
+
+				int err = machine_alu_op(machine, op, reg_dst, reg_src, imm32, flag_set);
+				if (err != ERR_OK) {
+					*pc -= 2;
+					return err;
+				}
+
+			} else if (((hw1 >> 6) & 0b1101) == 0b1001) {
+				// Move, plain 16-bit immediate
+				uint32_t bit_i    = (hw1 >> 10) & 0b1;
+				uint32_t op       = (hw1 >> 7) & 0b1;
+				uint32_t op2      = (hw1 >> 4) & 0b11;
+				uint32_t imm4     = (hw1 >> 0) & 0b1111;
+				uint32_t imm8     = (hw2 >> 0) & 0xff;
+
+				uint32_t imm16 = (imm4 << 12) | (bit_i << 11) | (imm3 << 8) | imm8;
+				if (op == 1 && op2 == 0b00) {
+					// MOVT
+					*pc -= 2;
+					return ERR_UNDEFINED;
+				} else if (op == 0 && op2 == 0b00) {
+					// MOVW
+					*reg_dst = imm16;
+				} else {
+					*pc -= 2;
+					return ERR_UNDEFINED;
+				}
+
+			} else if (((hw1 >> 8) & 0b11) == 0b11 && (((hw1 >> 4) & 0b1) == 0b0)) {
+				// Bit field operations, saturate with shift
+				uint32_t op       = (hw1 >> 5) & 0b111;
+				uint32_t imm5     = (hw2 >> 0) & 0b11111;
+				uint32_t imm2     = (hw2 >> 6) & 0b11;
+				if (op == 0b011) {
+					uint32_t msb = imm5;
+					uint32_t lsb = (imm3 << 2) | imm2;
+					uint32_t mask = 0xffffffff;
+					uint32_t msb_offset = 31 - msb;
+					mask = (mask >> lsb) << lsb;
+					mask = (mask << msb_offset) >> msb_offset;
+					uint32_t insert;
+					if (reg_src == pc) {
+						// BFC
+						insert = 0;
+					} else {
+						// BFI
+						insert = *reg_src;
+					}
+					*reg_dst = (*reg_dst & ~mask) | (insert & mask);
+				} else if (op == 0b110) {
+					// UBFX
+					uint32_t lsb         = (imm3 << 2) | imm2;
+					uint32_t widthminus1 = imm5;
+					uint32_t msb         = lsb + widthminus1;
+					*reg_dst = *reg_src << (31 - msb);
+					*reg_dst = *reg_dst >> (lsb + (31 - msb));
+				} else if (op == 0b010) {
+					// SBFX
+					uint32_t lsb         = (imm3 << 2) | imm2;
+					uint32_t widthminus1 = imm5;
+					uint32_t msb         = lsb + widthminus1;
+					*reg_dst = *reg_src << (31 - msb);
+					*reg_dst = (int32_t)*reg_dst >> (lsb + (31 - msb));
+				} else {
+					*pc -= 2; // undo 32-bit change
+					return ERR_UNDEFINED;
+				}
+
+			} else {
+				*pc -= 2; // undo 32-bit change
+				return ERR_UNDEFINED;
+			}
+
+		} else if ((hw1 >> 4) == 0b111100111011 && (hw2 >> 14) == 0b10) {
+			// Special control operations, ignore.
+
+		} else if ((hw1 >> 11) == 0b11110 && ((hw2 >> 11) & 0b10111) == 0b10111) {
+			// BL, B.W
 			uint32_t imm10 = hw1 & 0x3ff;
 			uint32_t imm11 = hw2 & 0x7ff;
+			bool flag_link = (hw2 >> 14) & 0b1;
 			int32_t pc_offset = (int32_t)(((uint32_t)imm10 << 12) | ((uint32_t)imm11 << 1)); // >> 11;
-			pc_offset <<= 10;
-			pc_offset >>= 10;
+			pc_offset <<= 10; // put in the top bits
+			pc_offset >>= 10; // sign-extend
 			uint32_t new_pc = (int32_t)*pc + pc_offset;
 			machine_log(machine, LOG_CALLS, "%*sBL   %7x (sp: %x) -> %x\n", machine->call_depth * 2, "", *pc, *sp, new_pc - 1);
 			machine_add_backtrace(machine, *pc - 5);
-			*lr = *pc;
+			if (flag_link) {
+				*lr = *pc;
+			}
 			*pc = new_pc;
 
-		} else if ((hw1 >> 4) == 0b111100111011 || (hw2 >> 14) == 0b10) {
-			// Special control operations, ignore.
+		} else if ((hw1 >> 11) == 0b11110 && ((hw2 >> 12) & 0b1101) == 0b1000 && machine_versioncheck(machine, CORTEX_M4)) {
+			// T3: B (conditional branch)
+			uint32_t cond = (hw1 >> 6) & 0b1111;
+			uint32_t imm6 = hw1 & 0x3f;
+			uint32_t imm11 = hw2 & 0x7ff;
+			uint32_t s  = (hw1 >> 10) & 0b1;
+			uint32_t j1 = (hw2 >> 13) & 0b1;
+			uint32_t j2 = (hw2 >> 11) & 0b1;
+			if ((cond >> 1) == 0b111) {
+				// Something else
+				*pc -= 2;
+				return ERR_UNDEFINED;
+			}
+			int32_t pc_offset = (int32_t)((s << 20) | (j2 << 19) | (j1 << 18) | (imm6 << 12) | (imm11 << 1));
+			pc_offset <<= 11; // put in the top bits
+			pc_offset >>= 11; // sign-extend
+			uint32_t new_pc = (int32_t)*pc + pc_offset;
+			if (machine_condition(machine, cond)) {
+				machine_log(machine, LOG_CALLS, "%*sBcond %7x (sp: %x) -> %x\n", machine->call_depth * 2, "", *pc, *sp, new_pc - 1);
+				machine_add_backtrace(machine, *pc - 5);
+				*pc = new_pc;
+			}
+
+		} else if ((hw1 >> 9) == 0b1111100 && machine_versioncheck(machine, CORTEX_M4)) {
+			// Load and store single data item, and memory hints
+			uint32_t *reg_base   = &machine->regs[(hw1 >> 0 ) & 0b1111]; // Rn
+			uint32_t *reg_target = &machine->regs[(hw2 >> 12) & 0b1111]; // Rt
+			bool     flag_signed = (hw1 >> 8) & 0b1;
+			uint32_t size        = (hw1 >> 5) & 0b11;
+			bool     flag_load   = (hw1 >> 4) & 0b1;
+
+			transfer_type_t transfer_type = flag_load ? LOAD : STORE;
+			width_t width;
+			if (size == 0b10) {
+				if (flag_signed) {
+					*pc -= 2;
+					return ERR_UNDEFINED;
+				}
+				width = WIDTH_32;
+			} else if (size == 0b00) {
+				width = WIDTH_8;
+			} else if (size == 0b01) {
+				width = WIDTH_16;
+			} else {
+				*pc -= 2;
+				return ERR_UNDEFINED;
+			}
+
+			if (reg_base == pc) {
+				if (width != WIDTH_32 || !flag_load) {
+					// TODO: other widths
+					*pc -= 2;
+					return ERR_UNDEFINED;
+				}
+				// PC +/- imm12 (PC-relative)
+				uint32_t imm12 = (hw2 >> 0) & 0xfff;
+				bool flag_up = (hw1 >> 7) & 0b1;
+				uint32_t address = (*pc - 1) & ~3UL;
+				if (flag_up) {
+					address += imm12;
+				} else {
+					address -= imm12;
+				}
+				if (machine_transfer(machine, address, transfer_type, reg_target, width, flag_signed)) {
+					return ERR_MEM;
+				}
+
+			} else if (((hw1 >> 7) & 0b1) == 0b1) {
+				if (reg_base == pc) {
+					*pc -= 2;
+					return ERR_UNDEFINED;
+				} else {
+					// T3: LDR.W / STR.W (immediate)
+					uint32_t imm12 = (hw2 >> 0) & 0xfff;
+					uint32_t address = *reg_base + imm12;
+					if (machine_transfer(machine, address, transfer_type, reg_target, width, flag_signed)) {
+						return ERR_MEM;
+					}
+				}
+
+			} else {
+				if (((hw2 >> 6) & 0b111111) == 0b000000) {
+					// T2: LDR.W / STR.W (register)
+					uint32_t *reg_off = &machine->regs[(hw2 >> 0) & 0b1111];
+					uint32_t shift = (hw2 >> 4) & 0b11;
+					uint32_t address = *reg_base + (*reg_off << shift);
+					if (machine_transfer(machine, address, transfer_type, reg_target, width, flag_signed)) {
+						return ERR_MEM;
+					}
+
+				} else if (((hw2 >> 11) & 0b1) == 0b1) {
+					// T4: LDR.W / STR.W (immediate)
+					bool flag_index = (hw2 >> 10) & 0b1;
+					bool flag_add   = (hw2 >> 9)  & 0b1;
+					bool flag_wback = (hw2 >> 8)  & 0b1;
+					uint32_t imm8   = (hw2 >> 0)  & 0xff;
+					uint32_t offset_addr = flag_add ? *reg_base + imm8 : *reg_base - imm8;
+					uint32_t address = flag_index ? offset_addr : *reg_base;
+					if (flag_wback) {
+						*reg_base = offset_addr;
+					}
+					if (machine_transfer(machine, address, transfer_type, reg_target, width, flag_signed)) {
+						return ERR_MEM;
+					}
+
+				} else {
+					*pc -= 2; // undo 32-bit change
+					return ERR_UNDEFINED;
+				}
+			}
+
+		} else if ((hw1 >> 9) == 0b1111101 && machine_versioncheck(machine, CORTEX_M4)) {
+			// Data processing instructions, non-immediate
+			// (except for Data processing: constant shift)
+			uint32_t *reg_dst  = &machine->regs[(hw2 >> 8) & 0b1111]; // Rd
+			uint32_t *reg_src  = &machine->regs[(hw1 >> 0) & 0b1111]; // Rn
+			uint32_t *reg_src2 = &machine->regs[(hw2 >> 0) & 0b1111]; // Rm
+			if ((hw1 >> 7) == 0b111110100 && ((hw2 >> 7) & 0b111100001) == 0b111100000) {
+				// Register-controlled shift.
+				uint32_t op       = (hw1 >> 5) & 0b11;
+				bool     flag_set = (hw1 >> 4) & 0b1;
+				uint32_t op2      = (hw2 >> 4) & 0b111;
+				if (op2 != 0b000) {
+					*pc -= 2; // undo 32-bit change
+					return ERR_UNDEFINED;
+				}
+				if (op == 0b00) {
+					*reg_dst = machine_instr_lsl(machine, *reg_src, *reg_src2 & 0xff, flag_set);
+				} else if (op == 0b01) {
+					*reg_dst = machine_instr_lsr(machine, *reg_src, *reg_src2 & 0xff, flag_set);
+				} else if (op == 0b10) {
+					*reg_dst = machine_instr_asr(machine, *reg_src, *reg_src2 & 0xff, flag_set);
+				} else {
+					// ROR
+					*pc -= 2; // undo 32-bit change
+					return ERR_UNDEFINED;
+				}
+				if (flag_set) {
+					machine->psr.n = (int32_t)*reg_dst < 0;
+					machine->psr.z = *reg_dst == 0;
+				}
+
+			} else if ((hw1 >> 7) == 0b111110100 && ((hw2 >> 7) & 0b111100001) == 0b111100001) {
+				// Sign or zero extension, with optional addition.
+				uint32_t op       = (hw1 >> 4) & 0b111;
+				uint32_t rot      = (hw2 >> 4) & 0b11;
+				uint32_t rotate = rot << 3;
+
+				if (op == 0b101 && reg_src == pc) {
+					*reg_dst = (*reg_src2) >> rotate;
+				} else {
+					*pc -= 2; // undo 32-bit change
+					return ERR_UNDEFINED;
+				}
+
+			} else if ((hw1 >> 7) == 0b111110110) {
+				// 32-bit multiplies and sum of absolute differences, with
+				// or without accumulate.
+				uint32_t op = (hw1 >> 4) & 0b111;
+				uint32_t op2 = (hw2 >> 4) & 0b1111;
+				uint32_t *reg_acc = &machine->regs[(hw2 >> 12) & 0b1111]; // Ra
+				if (op == 0b000 && op2 == 0b0000) {
+					if (reg_acc == pc) {
+						// MUL
+						*reg_dst = *reg_src * *reg_src2;
+					} else {
+						// MLA
+						*reg_dst = *reg_src * *reg_src2 + *reg_acc;
+					}
+				} else if (op == 0b000 && op2 == 0b0001 && reg_acc != pc) {
+					// MLS
+					*reg_dst = *reg_acc - *reg_src * *reg_src2;
+				} else {
+					*pc -= 2; // undo 32-bit change
+					return ERR_UNDEFINED;
+				}
+
+			} else if ((hw1 >> 7) == 0b111110111) {
+				// 64-bit multiply, multiply-accumulate, and divide
+				// instructions.
+				uint32_t op = (hw1 >> 4) & 0b111;
+				uint32_t op2 = (hw2 >> 4) & 0b1111;
+				uint32_t *reg_dst_hi = reg_dst; // RdHi
+				uint32_t *reg_dst_lo = &machine->regs[(hw2 >> 12) & 0b1111]; // RdLo
+				if (op == 0b000 && op2 == 0b0000) {
+					// SMULL
+					int64_t result = (int64_t)*reg_src * (int64_t)*reg_src2;
+					*reg_dst_lo = (uint32_t)result;
+					*reg_dst_hi = (uint32_t)(result >> 32);
+				} else if (op == 0b010 && op2 == 0b0000) {
+					// UMULL
+					uint64_t result = (uint64_t)*reg_src * (uint64_t)*reg_src2;
+					*reg_dst_lo = (uint32_t)result;
+					*reg_dst_hi = (uint32_t)(result >> 32);
+				} else if (op == 0b001 && op2 == 0b1111) {
+					// SDIV
+					if (*reg_src2 == 0) {
+						// TODO: this shouldn't always trap
+						*pc -= 2; // undo 32-bit change
+						return ERR_DIVZERO;
+					}
+					*reg_dst = (int32_t)*reg_src / (int32_t)*reg_src2;
+				} else if (op == 0b011 && op2 == 0b1111) {
+					// UDIV
+					if (*reg_src2 == 0) {
+						// TODO: this shouldn't always trap
+						*pc -= 2; // undo 32-bit change
+						return ERR_DIVZERO;
+					}
+					*reg_dst = *reg_src / *reg_src2;
+				} else {
+					*pc -= 2; // undo 32-bit change
+					return ERR_UNDEFINED;
+				}
+
+			} else {
+				*pc -= 2; // undo 32-bit change
+				return ERR_UNDEFINED;
+			}
 
 		} else {
 			*pc -= 2; // undo 32-bit change
@@ -849,7 +1458,7 @@ int machine_step(machine_t *machine) {
 		return ERR_UNDEFINED;
 	}
 
-	return 0;
+	return ERR_OK;
 }
 
 void machine_print_registers(machine_t *machine) {

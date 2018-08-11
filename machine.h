@@ -6,13 +6,16 @@
 #include <stdlib.h>
 
 typedef struct {
-	uint32_t :24;
-	uint32_t t:1; // Thumb mode
-	uint32_t :3;
-	uint32_t v:1; // overflow
-	uint32_t c:1; // carry
-	uint32_t z:1; // zero
-	uint32_t n:1; // negative
+	uint32_t     : 4;
+	uint32_t t   : 1; // Thumb mode
+	uint32_t     : 4;
+	uint32_t it2 : 6; // IT[7:2]
+	uint32_t     : 11;
+	uint32_t it1 : 2; // IT[1:0]
+	uint32_t v   : 1; // overflow
+	uint32_t c   : 1; // carry
+	uint32_t z   : 1; // zero
+	uint32_t n   : 1; // negative
 } flags_t;
 
 #define MACHINE_BACKTRACE_LEN (100)
@@ -73,8 +76,16 @@ typedef struct {
 
 	// The NVIC peripheral
 	struct {
-		uint32_t ip[8]; // interrupt priority
+		uint8_t ip[8 * 4]; // interrupt priority
 	} nvic;
+
+	struct {
+		uint32_t cpacr; // coprocessor access control register
+	} scb;
+
+	struct {
+		uint32_t pselreset[2];
+	} uicr;
 
 	// Statistics and backtrace depth.
 	// Warning: call_depth may not fit in the backtrace! So check before
@@ -106,6 +117,7 @@ enum {
 	ERR_HALT,      // program has paused after a request
 	ERR_EXIT,      // program has exited (should not normally happen on a MCU)
 	ERR_BREAK,     // hit a breakpoint
+	ERR_DIVZERO,   // divide by zero
 	ERR_MEM,       // memory error
 	ERR_PC,        // invalid PC
 	ERR_UNDEFINED, // undefined instruction
@@ -119,6 +131,11 @@ enum {
 	LOG_CALLS_SP, // log calls and registers at stack moves
 	LOG_INSTRS,   // log everything
 };
+
+enum {
+	CORTEX_M0,
+	CORTEX_M4,
+} machine_core_t;
 
 machine_t * machine_create(size_t image_size, size_t pagesize, size_t ram_size, int loglevel);
 void machine_load(machine_t *machine, uint8_t *image, size_t image_size);
