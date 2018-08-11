@@ -477,6 +477,9 @@ static int machine_alu_op(machine_t *machine, uint32_t op, uint32_t *reg_dst, ui
 	} else if (op == 0b1010) {
 		// ADC
 		*reg_dst = machine_instr_adc(machine, *reg_src, value, setflags);
+	} else if (op == 0b1011) {
+		// SBC
+		*reg_dst = machine_instr_sbc(machine, *reg_src, value, setflags);
 	} else if (op == 0b1110) {
 		// RSB
 		*reg_dst = machine_instr_sub(machine, value, *reg_src, setflags);
