@@ -473,20 +473,20 @@ int machine_step(machine_t *machine) {
 		uint32_t  imm  = instruction & 0xff;
 		uint32_t *reg = &machine->regs[(instruction >> 8)  & 0b111];
 		size_t   op   = (instruction >> 11) & 0b11;
-		bool set_cc = true;
+		bool setflags = true;
 		if (op == 0) { // MOVS
 			*reg = imm;
 		} else if (op == 1) { // CMP
 			// Update flags as if doing *reg - imm
 			machine_instr_sub(machine, *reg, imm, true);
-			set_cc = false;
+			setflags = false;
 			// Don't update *reg
 		} else if (op == 2) { // ADDS
 			*reg = machine_instr_add(machine, *reg, imm, true);
 		} else if (op == 3) { // SUBS
 			*reg = machine_instr_sub(machine, *reg, imm, true);
 		}
-		if (set_cc) {
+		if (setflags) {
 			machine->psr.n = (int32_t)*reg < 0;
 			machine->psr.z = *reg == 0;
 		}
@@ -496,7 +496,7 @@ int machine_step(machine_t *machine) {
 		uint32_t *reg_dst = &machine->regs[(instruction >> 0) & 0b111];
 		uint32_t *reg_src = &machine->regs[(instruction >> 3) & 0b111];
 		uint32_t op       = (instruction >> 6) & 0b1111;
-		bool set_cc = true;
+		bool setflags = true;
 		if (op == 0b0000) { // ANDS
 			*reg_dst &= *reg_src;
 		} else if (op == 0b0001) { // EORS
@@ -515,13 +515,13 @@ int machine_step(machine_t *machine) {
 			// set CC on Rd AND Rs
 			machine->psr.n = (int32_t)(*reg_src & *reg_dst) < 0;
 			machine->psr.z = (int32_t)(*reg_src & *reg_dst) == 0;
-			set_cc = false;
+			setflags = false;
 		} else if (op == 0b1001) { // NEG / RSBS
 			*reg_dst = machine_instr_sub(machine, 0, *reg_src, true);
 		} else if (op == 0b1010) { // CMP
 			// set CC on Rd - Rs
 			machine_instr_sub(machine, *reg_dst, *reg_src, true);
-			set_cc = false;
+			setflags = false;
 		} else if (op == 0b1100) { // ORRS
 			// does not update C or V
 			*reg_dst |= *reg_src;
@@ -537,7 +537,7 @@ int machine_step(machine_t *machine) {
 		} else {
 			return ERR_UNDEFINED;
 		}
-		if (set_cc) {
+		if (setflags) {
 			machine->psr.n = (int32_t)*reg_dst < 0;
 			machine->psr.z = *reg_dst == 0;
 		}
