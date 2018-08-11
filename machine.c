@@ -1384,6 +1384,33 @@ int machine_step(machine_t *machine) {
 					return ERR_UNDEFINED;
 				}
 
+			} else if ((hw1 >> 7) == 0b111110101 && ((hw2 >> 7) & 0b111100001) == 0b111100001) {
+				// Other three register data processing
+				uint32_t op       = (hw1 >> 4) & 0b111;
+				uint32_t op2      = (hw2 >> 4) & 0b111;
+				if (op == 0b011 && op2 == 0b000) {
+					// CLZ: count leading zeroes
+					if (*reg_src2 == 0) {
+						// __builtin_clz is undefined when *reg_src2 is
+						// zero.
+						*reg_dst = 32;
+					} else {
+						if (sizeof(int) == sizeof(uint32_t)) {
+							*reg_dst = __builtin_clz(*reg_src2);
+						} else {
+							// Fallback for non-32bit integers.
+							for (*reg_dst = 0; *reg_dst < 32; *reg_dst += 1) {
+								if (*reg_src2 & (1 << (31 - *reg_dst))) {
+									break;
+								}
+							}
+						}
+					}
+				} else {
+					*pc -= 2; // undo 32-bit change
+					return ERR_UNDEFINED;
+				}
+
 			} else if ((hw1 >> 7) == 0b111110110) {
 				// 32-bit multiplies and sum of absolute differences, with
 				// or without accumulate.
