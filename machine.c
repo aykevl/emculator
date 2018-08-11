@@ -522,6 +522,10 @@ int machine_step(machine_t *machine) {
 			// set CC on Rd - Rs
 			machine_instr_sub(machine, *reg_dst, *reg_src, true);
 			setflags = false;
+		} else if (op == 0b1011) { // CMN
+			// set cc on Rd + Rs
+			machine_instr_add(machine, *reg_dst, *reg_src, true);
+			setflags = false;
 		} else if (op == 0b1100) { // ORRS
 			// does not update C or V
 			*reg_dst |= *reg_src;
@@ -535,6 +539,7 @@ int machine_step(machine_t *machine) {
 			// does not update C or V
 			*reg_dst = ~*reg_src;
 		} else {
+			// The only missing ALU op is ROR.
 			return ERR_UNDEFINED;
 		}
 		if (setflags) {
