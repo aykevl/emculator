@@ -4,6 +4,12 @@
 
 #include <string.h>
 
+// This file implements the CPU core and memory subsystem.
+// For more information on the instruction set, see:
+// https://ece.uwaterloo.ca/~ece222/ARM/ARM7-TDMI-manual-pt3.pdf
+// http://hermes.wings.cs.wisc.edu/files/Thumb-2SupplementReferenceManual.pdf
+// https://www.heyrick.co.uk/armwiki/The_Status_register
+
 #ifdef __EMSCRIPTEN__
 
 #include <emscripten.h>
@@ -417,10 +423,6 @@ int machine_step(machine_t *machine) {
 		return ERR_BREAK;
 	}
 
-	// Run instruction
-	// https://ece.uwaterloo.ca/~ece222/ARM/ARM7-TDMI-manual-pt3.pdf
-	// http://hermes.wings.cs.wisc.edu/files/Thumb-2SupplementReferenceManual.pdf
-	// https://www.heyrick.co.uk/armwiki/The_Status_register
 	if (*pc == 0xdeadbeef) {
 		return ERR_EXIT;
 	}
