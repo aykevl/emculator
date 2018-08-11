@@ -206,10 +206,11 @@ static void machine_sub_backtrace(machine_t *machine) {
 	machine->call_depth--;
 }
 
-static int machine_instr_push(machine_t *machine, uint32_t *reg, uint32_t reg_list) {
+static int machine_instr_stmdb(machine_t *machine, uint32_t *reg, uint32_t reg_list, bool wback) {
+	uint32_t address = *reg;
 	for (int i = 14; i >= 0; i--) {
 		if (reg_list & (1 << i)) {
-			*reg -= 4;
+			address -= 4;
 			if (reg == &machine->sp) {
 				if (i == 14) {
 					machine_log(machine, LOG_CALLS, "%*spush lr      (sp: %x) (lr: %x)\n", machine->call_depth * 2, "", machine->sp, machine->lr + 2);
@@ -218,15 +219,36 @@ static int machine_instr_push(machine_t *machine, uint32_t *reg, uint32_t reg_li
 					machine_log(machine, LOG_CALLS, "%*spush r%d      (sp: %x)\n", machine->call_depth * 2, "", i, machine->sp);
 				}
 			}
-			if (machine_transfer(machine, *reg, STORE, &machine->regs[i], WIDTH_32, false)) {
+			if (machine_transfer(machine, address, STORE, &machine->regs[i], WIDTH_32, false)) {
 				return ERR_MEM;
 			}
 		}
 	}
+	if (wback) {
+		*reg = address;
+	}
 	return 0;
 }
 
-static int machine_instr_pop(machine_t *machine, uint32_t *reg, uint32_t reg_list) {
+static int machine_instr_stmia(machine_t *machine, uint32_t *reg, uint32_t reg_list, bool wback) {
+	uint32_t address = *reg;
+	for (size_t i = 0; i <= 15; i++) {
+		if (((reg_list >> i) & 1) == 1) {
+			uint32_t *reg = &machine->regs[i];
+			if (machine_transfer(machine, address, STORE, reg, WIDTH_32, false)) {
+				return ERR_MEM;
+			}
+			address += 4;
+		}
+	}
+	if (wback) {
+		*reg = address;
+	}
+	return 0;
+}
+
+static int machine_instr_ldmia(machine_t *machine, uint32_t *reg, uint32_t reg_list, bool wback) {
+	uint32_t address = *reg;
 	for (int i = 0; i <= 15; i++) {
 		if (reg_list & (1 << i)) {
 			if (reg == &machine->sp) {
@@ -237,11 +259,14 @@ static int machine_instr_pop(machine_t *machine, uint32_t *reg, uint32_t reg_lis
 					machine_log(machine, LOG_CALLS, "%*spop r%d       (sp: %x)\n", machine->call_depth * 2, "", i, machine->sp);
 				}
 			}
-			if (machine_transfer(machine, *reg, LOAD, &machine->regs[i], WIDTH_32, false)) {
+			if (machine_transfer(machine, address, LOAD, &machine->regs[i], WIDTH_32, false)) {
 				return ERR_MEM;
 			}
-			*reg += 4;
+			address += 4;
 		}
+	}
+	if (wback) {
+		*reg = address;
 	}
 	return 0;
 }
@@ -722,7 +747,7 @@ int machine_step(machine_t *machine) {
 			if (flag_pc_lr) {
 				reg_list |= (1 << 15); // PC
 			}
-			int err = machine_instr_pop(machine, sp, reg_list);
+			int err = machine_instr_ldmia(machine, sp, reg_list, true);
 			if (err != 0) {
 				return err;
 			}
@@ -730,7 +755,7 @@ int machine_step(machine_t *machine) {
 			if (flag_pc_lr) {
 				reg_list |= (1 << 14); // LR
 			}
-			int err = machine_instr_push(machine, sp, reg_list);
+			int err = machine_instr_stmdb(machine, sp, reg_list, true);
 			if (err != 0) {
 				return err;
 			}
@@ -738,26 +763,22 @@ int machine_step(machine_t *machine) {
 
 	} else if ((instruction >> 12) == 0b1100) {
 		// Format 15: multiple load/store (LDMIA and STMIA)
-		uint8_t  reg_list = (instruction >> 0) & 0xff;
-		uint32_t *reg_base = &machine->regs[(instruction >> 8) & 0b111];
+		uint32_t  reg_list = (instruction >> 0) & 0xff;
+		uint32_t  reg_base_num = (instruction >> 8) & 0b111;
+		uint32_t *reg_base = &machine->regs[reg_base_num];
 		bool     flag_load = (instruction >> 11) & 0b1;
 		if (reg_list == 0) {
 			machine_log(machine, LOG_ERROR, "\nERROR: LDMIA/STMIA does not allow zero registers (%04x)\n", instruction);
 			return ERR_UNDEFINED;
 		}
-		uint32_t address = *reg_base;
-		size_t offset = 0;
-		for (size_t i = 0; i < 8; i++) {
-			if (((reg_list >> i) & 1) == 1) {
-				uint32_t *reg = &machine->regs[i];
-				transfer_type_t transfer_type = flag_load ? LOAD : STORE;
-				if (machine_transfer(machine, address + offset, transfer_type, reg, WIDTH_32, false)) {
-					return ERR_MEM;
-				}
-				offset += 4;
-			}
+		if (flag_load) {
+			// LDMIA!
+			bool wback = (reg_list & (1 << reg_base_num)) == 0;
+			machine_instr_ldmia(machine, reg_base, reg_list, wback);
+		} else {
+			// STMIA!
+			machine_instr_stmia(machine, reg_base, reg_list, true);
 		}
-		*reg_base = address + offset;
 
 	} else if ((instruction >> 12) == 0b1101) {
 		// Format 16: conditional branch
