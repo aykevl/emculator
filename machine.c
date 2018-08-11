@@ -592,7 +592,7 @@ int machine_step(machine_t *machine) {
 		// Format 6: PC-relative load
 		uint32_t imm = instruction & 0xff; // 8 bits
 		uint32_t *reg = &machine->regs[(instruction >> 8)  & 0b111];
-		uint32_t address = ((*pc + 2) >> 2U << 2U) + imm * 4;
+		uint32_t address = ((*pc + 2) & ~3UL) + imm * 4;
 		if (machine_transfer(machine, address, LOAD, reg, WIDTH_32, false)) {
 			return ERR_MEM;
 		}
@@ -682,7 +682,9 @@ int machine_step(machine_t *machine) {
 		bool     flag_sp  = (instruction >> 11) & 0b1;
 		uint32_t value = flag_sp ? *sp : *pc;
 		if (!flag_sp) {
+			// ADR
 			// for PC: force bit 1 to 0
+			value += 2;
 			value &= ~0b11UL;
 		}
 		*reg_dst = value + (word8 << 2);
