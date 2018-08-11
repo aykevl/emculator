@@ -21,6 +21,7 @@ var (
 )
 
 var loglevels = map[string]int{
+	"none":    C.LOG_NONE,
 	"error":   C.LOG_ERROR,
 	"err":     C.LOG_ERROR,
 	"warning": C.LOG_WARN,
