@@ -874,6 +874,10 @@ int machine_step(machine_t *machine) {
 			*pc += (flag_i << 6) + (imm5 << 1) + 2;
 		}
 
+	} else if ((instruction & 0xffef) == 0xb662) {
+		// CPSID/CPSIE
+		// Ignore for now.
+
 	} else if ((instruction >> 8) == 0b10111010) {
 		// T1: Reverse bytes
 		uint32_t *reg_dst = &machine->regs[(instruction >> 0) & 0b111];
