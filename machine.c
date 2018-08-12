@@ -265,6 +265,22 @@ static int machine_instr_stmia(machine_t *machine, uint32_t *reg, uint32_t reg_l
 	return 0;
 }
 
+static int machine_instr_ldmdb(machine_t *machine, uint32_t *reg, uint32_t reg_list, bool wback) {
+	uint32_t address = *reg;
+	for (int i = 14; i >= 0; i--) {
+		if (reg_list & (1 << i)) {
+			address -= 4;
+			if (machine_transfer(machine, address, LOAD, &machine->regs[i], WIDTH_32, false)) {
+				return ERR_MEM;
+			}
+		}
+	}
+	if (wback) {
+		*reg = address;
+	}
+	return 0;
+}
+
 static int machine_instr_ldmia(machine_t *machine, uint32_t *reg, uint32_t reg_list, bool wback) {
 	uint32_t address = *reg;
 	for (int i = 0; i <= 15; i++) {
@@ -978,8 +994,11 @@ int machine_step(machine_t *machine) {
 					return err;
 				}
 			} else {
-				*pc -= 2; // undo 32-bit change
-				return ERR_UNDEFINED;
+				// LDMDB
+				int err = machine_instr_ldmdb(machine, reg, hw2, flag_wback);
+				if (err != 0) {
+					return err;
+				}
 			}
 
 		} else if ((hw1 >> 6) == 0b1110100010) {
