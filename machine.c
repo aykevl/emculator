@@ -901,6 +901,8 @@ int machine_step(machine_t *machine) {
 		// This emulator handles some breakpoints in a special way.
 		if (imm8 == 0x81) {
 			machine->loglevel = LOG_INSTRS;
+		} else if (imm8 == 0x80) {
+			machine->loglevel = LOG_ERROR;
 		} else {
 			return ERR_BREAK;
 		}
