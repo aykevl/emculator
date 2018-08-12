@@ -1025,9 +1025,34 @@ int machine_step(machine_t *machine) {
 
 		} else if (((hw1 >> 6) & 0b1111111001) == 0b1110100001) {
 			// Load/store double and exclusive, and table branch
-			bool     flag_load = (hw1 >> 4) & 0b1;
-			uint32_t *reg_src  = &machine->regs[(hw1 >> 0)  & 0b1111]; // Rn
-			if ((hw1 >> 5) == 0b11101000110) {
+			bool     flag_index = (hw1 >> 8) & 0b1; // preindex
+			bool     flag_up    = (hw1 >> 7) & 0b1;
+			bool     flag_wback = (hw1 >> 5) & 0b1;
+			bool     flag_load  = (hw1 >> 4) & 0b1;
+			uint32_t *reg_src   = &machine->regs[(hw1 >> 0)  & 0b1111]; // Rn
+			if (flag_index || flag_wback) {
+				// Load and store double: LDRD, STRD
+				uint32_t imm8 = hw2 & 0xff;
+				uint32_t *reg_dst1 = &machine->regs[(hw2 >> 12) & 0b1111]; // Rt
+				uint32_t *reg_dst2 = &machine->regs[(hw2 >>  8) & 0b1111]; // Rt2
+				uint32_t base = reg_src == pc ? *reg_src & ~3UL : *reg_src;
+				uint32_t offset_addr = flag_up ? base + imm8 : base - imm8;
+				uint32_t address = flag_index ? offset_addr : (reg_src == pc ? *reg_src & ~1UL : *reg_src);
+				transfer_type_t transfer_type = flag_load ? LOAD : STORE;
+				if (flag_wback) {
+					*reg_src = offset_addr;
+				}
+				if (machine_transfer(machine, address, transfer_type, reg_dst1, WIDTH_32, false)) {
+					return ERR_MEM;
+				}
+				if (machine_transfer(machine, address + 4, transfer_type, reg_dst2, WIDTH_32, false)) {
+					return ERR_MEM;
+				}
+			} else if (!flag_up) {
+				// Load and store exclusive.
+				*pc -= 2;
+				return ERR_UNDEFINED;
+			} else  {
 				// Load/store exclusive byte, halfword, doubleword, and
 				// table branch.
 				uint32_t op        = (hw2 >> 4)  & 0b1111;
@@ -1060,9 +1085,6 @@ int machine_step(machine_t *machine) {
 					*pc -= 2;
 					return ERR_UNDEFINED;
 				}
-			} else {
-				*pc -= 2;
-				return ERR_UNDEFINED;
 			}
 
 		} else if ((hw1 >> 9) == 0b1110101) {
