@@ -1186,7 +1186,7 @@ int machine_step(machine_t *machine) {
 						insert = 0;
 					} else {
 						// BFI
-						insert = *reg_src;
+						insert = *reg_src << lsb;
 					}
 					*reg_dst = (*reg_dst & ~mask) | (insert & mask);
 				} else if (op == 0b110) {
