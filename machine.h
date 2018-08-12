@@ -18,6 +18,11 @@ typedef struct {
 	uint32_t n   : 1; // negative
 } flags_t;
 
+typedef struct {
+	uint32_t pc;
+	uint32_t sp;
+} backtrace_item_t;
+
 #define MACHINE_BACKTRACE_LEN (100)
 
 typedef struct {
@@ -91,7 +96,7 @@ typedef struct {
 	// Warning: call_depth may not fit in the backtrace! So check before
 	// indexing.
 	int call_depth;
-	uint32_t backtrace[MACHINE_BACKTRACE_LEN];
+	backtrace_item_t backtrace[MACHINE_BACKTRACE_LEN];
 	uint32_t last_sp;
 
 	volatile uint32_t hwbreak[4];

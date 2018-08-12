@@ -208,19 +208,21 @@ void machine_reset(machine_t *machine) {
 	//machine->lr = 0xffffffff; // exit address
 	machine->lr = 0xdeadbeef; // exit address
 	machine->pc = machine->image32[1]; // Reset_Vector address
-	machine->backtrace[1] = machine->pc - 1;
+	machine->backtrace[1].pc = machine->pc - 1;
+	machine->backtrace[1].sp = machine->sp;
 	machine_log(machine, LOG_CALLS, "RESET %5x (sp: %x)\n", machine->pc - 1, machine->sp);
 }
 
-static void machine_add_backtrace(machine_t *machine, uint32_t pc) {
+static void machine_add_backtrace(machine_t *machine, uint32_t pc, uint32_t sp) {
 	machine->call_depth++;
 	if (machine->call_depth >= 0 && machine->call_depth < MACHINE_BACKTRACE_LEN) {
-		machine->backtrace[machine->call_depth] = pc;
+		while (machine->call_depth > 0 && machine->backtrace[machine->call_depth - 1].sp <= sp) {
+			// Remove leaf functions that we already returned from.
+			machine->call_depth--;
+		}
+		machine->backtrace[machine->call_depth].pc = pc;
+		machine->backtrace[machine->call_depth].sp = sp;
 	}
-}
-
-static void machine_sub_backtrace(machine_t *machine) {
-	machine->call_depth--;
 }
 
 static int machine_instr_stmdb(machine_t *machine, uint32_t *reg, uint32_t reg_list, bool wback) {
@@ -228,12 +230,11 @@ static int machine_instr_stmdb(machine_t *machine, uint32_t *reg, uint32_t reg_l
 	for (int i = 14; i >= 0; i--) {
 		if (reg_list & (1 << i)) {
 			address -= 4;
-			if (reg == &machine->sp) {
+			if (reg == &machine->sp && wback) {
 				if (i == 14) {
-					machine_log(machine, LOG_CALLS, "%*spush lr      (sp: %x) (lr: %x)\n", machine->call_depth * 2, "", machine->sp, machine->lr + 2);
-					machine_add_backtrace(machine, machine->pc - 3);
+					machine_log(machine, LOG_CALLS, "%*sPUSH lr      (sp: %x) (lr: %x)\n", machine->call_depth * 2, "", address, machine->lr + 2);
 				} else {
-					machine_log(machine, LOG_CALLS, "%*spush r%d      (sp: %x)\n", machine->call_depth * 2, "", i, machine->sp);
+					machine_log(machine, LOG_CALLS, "%*spush r%d      (sp: %x)\n", machine->call_depth * 2, "", i, address);
 				}
 			}
 			if (machine_transfer(machine, address, STORE, &machine->regs[i], WIDTH_32, false)) {
@@ -268,12 +269,11 @@ static int machine_instr_ldmia(machine_t *machine, uint32_t *reg, uint32_t reg_l
 	uint32_t address = *reg;
 	for (int i = 0; i <= 15; i++) {
 		if (reg_list & (1 << i)) {
-			if (reg == &machine->sp) {
+			if (reg == &machine->sp && wback) {
 				if (i == 15) {
-					machine_log(machine, LOG_CALLS, "%*sPOP pc %5x (sp: %x)\n", machine->call_depth * 2, "", machine->pc - 1, machine->sp);
-					machine_sub_backtrace(machine);
+					machine_log(machine, LOG_CALLS, "%*sPOP pc %5x (sp: %x)\n", machine->call_depth * 2, "", machine->pc - 1, address);
 				} else {
-					machine_log(machine, LOG_CALLS, "%*spop r%d       (sp: %x)\n", machine->call_depth * 2, "", i, machine->sp);
+					machine_log(machine, LOG_CALLS, "%*spop r%d       (sp: %x)\n", machine->call_depth * 2, "", i, address);
 				}
 			}
 			if (machine_transfer(machine, address, LOAD, &machine->regs[i], WIDTH_32, false)) {
@@ -690,10 +690,9 @@ int machine_step(machine_t *machine) {
 			}
 			if (h1) {
 				machine_log(machine, LOG_CALLS, "%*sBLX r%ld %6x (sp: %x) -> %x\n", machine->call_depth * 2, "", reg_src - machine->regs, *pc - 3, *sp, *reg_src - 1);
-				machine_add_backtrace(machine, *pc - 3);
+				machine_add_backtrace(machine, *pc - 3, *sp);
 			} else if (reg_src == lr) {
 				machine_log(machine, LOG_CALLS, "%*sBX lr %6x (sp: %x) <- %x\n", machine->call_depth * 2, "", *pc - 3, *sp, *reg_src - 1);
-				machine_sub_backtrace(machine);
 			}
 			uint32_t next_lr = *pc;
 			*pc = *reg_src;
@@ -948,7 +947,6 @@ int machine_step(machine_t *machine) {
 		uint32_t condition = (instruction >> 8) & 0b1111;
 		int32_t offset = ((int32_t)(offset8 << 24) >> 23);
 		offset += 2;
-		uint32_t old_pc = *pc;
 		int result = machine_condition(machine, condition);
 		if (result < 0) {
 			return ERR_UNDEFINED;
@@ -956,19 +954,12 @@ int machine_step(machine_t *machine) {
 		if (result) {
 			*pc += offset;
 		}
-		if (old_pc != *pc) {
-			machine_log(machine, LOG_CALLS, "%*sBcond %6x (sp: %x) -> %x\n", machine->call_depth * 2, "", old_pc - 3, *sp, *pc - 1);
-		} else {
-			machine_log(machine, LOG_CALLS, "%*sBcond %6x (sp: %x) -> !%x\n", machine->call_depth * 2, "", old_pc - 3, *sp, *pc - 1);
-		}
 
 	} else if ((instruction >> 11) == 0b11100) {
 		// Format 18: unconditional branch
 		uint32_t offset11 = (instruction >> 0) & 0x7ff;
 		int32_t offset = ((int32_t)(offset11 << 21) >> 20);
-		uint32_t old_pc = *pc;
 		*pc += offset + 2;
-		machine_log(machine, LOG_CALLS, "%*sB    %7x (sp: %x) -> %x\n", machine->call_depth * 2, "", old_pc - 3, *sp, *pc - 1);
 
 	} else if ((instruction >> 11) == 0b11101 && machine_versioncheck(machine, CORTEX_M4)) {
 		// 32-bit instruction
@@ -1225,8 +1216,8 @@ int machine_step(machine_t *machine) {
 			pc_offset <<= 10; // put in the top bits
 			pc_offset >>= 10; // sign-extend
 			uint32_t new_pc = (int32_t)*pc + pc_offset;
-			machine_log(machine, LOG_CALLS, "%*sBL   %7x (sp: %x) -> %x\n", machine->call_depth * 2, "", *pc, *sp, new_pc - 1);
-			machine_add_backtrace(machine, *pc - 5);
+			machine_log(machine, LOG_CALLS, "%*sBL   %7x (sp: %x) -> %x\n", machine->call_depth * 2, "", *pc - 5, *sp, new_pc - 1);
+			machine_add_backtrace(machine, *pc - 5, *sp);
 			if (flag_link) {
 				*lr = *pc;
 			}
@@ -1250,8 +1241,6 @@ int machine_step(machine_t *machine) {
 			pc_offset >>= 11; // sign-extend
 			uint32_t new_pc = (int32_t)*pc + pc_offset;
 			if (machine_condition(machine, cond)) {
-				machine_log(machine, LOG_CALLS, "%*sBcond %7x (sp: %x) -> %x\n", machine->call_depth * 2, "", *pc, *sp, new_pc - 1);
-				machine_add_backtrace(machine, *pc - 5);
 				*pc = new_pc;
 			}
 
@@ -1599,14 +1588,14 @@ int machine_run(machine_t *machine) {
 			if (machine_loglevel(machine) < LOG_INSTRS) { // don't double-log
 				machine_print_registers(machine);
 			}
-			machine_add_backtrace(machine, machine->pc);
+			machine_add_backtrace(machine, machine->pc, machine->sp);
 			machine_log(machine, LOG_ERROR, "Backtrace:\n");
 			for (int i = 1; i < machine->call_depth; i++) {
 				if (i >= MACHINE_BACKTRACE_LEN) {
 					machine_log(machine, LOG_ERROR, " %3d. (too much recursion)\n", i);
 					break;
 				}
-				machine_log(machine, LOG_ERROR, " %3d. %8x\n", i, machine->backtrace[i]);
+				machine_log(machine, LOG_ERROR, " %3d. %8x (SP: %x)\n", i, machine->backtrace[i].pc, machine->backtrace[i].sp);
 			}
 			return err;
 		}
