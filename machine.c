@@ -1223,25 +1223,44 @@ int machine_step(machine_t *machine) {
 			}
 			*pc = new_pc;
 
-		} else if ((hw1 >> 11) == 0b11110 && ((hw2 >> 12) & 0b1101) == 0b1000 && machine_versioncheck(machine, CORTEX_M4)) {
+		} else if ((hw1 >> 11) == 0b11110 && ((hw2 >> 12) & 0b1101) == 0b1000) {
 			// T3: B (conditional branch)
 			uint32_t cond = (hw1 >> 6) & 0b1111;
-			uint32_t imm6 = hw1 & 0x3f;
-			uint32_t imm11 = hw2 & 0x7ff;
-			uint32_t s  = (hw1 >> 10) & 0b1;
-			uint32_t j1 = (hw2 >> 13) & 0b1;
-			uint32_t j2 = (hw2 >> 11) & 0b1;
 			if ((cond >> 1) == 0b111) {
 				// Something else
-				*pc -= 2;
-				return ERR_UNDEFINED;
-			}
-			int32_t pc_offset = (int32_t)((s << 20) | (j2 << 19) | (j1 << 18) | (imm6 << 12) | (imm11 << 1));
-			pc_offset <<= 11; // put in the top bits
-			pc_offset >>= 11; // sign-extend
-			uint32_t new_pc = (int32_t)*pc + pc_offset;
-			if (machine_condition(machine, cond)) {
-				*pc = new_pc;
+				if (hw1 == 0xf3ef && (hw2 >> 12) == 0b1000) {
+					// MRS
+					// I couldn't quickly find any documentation for the encoding
+					// of this instruction so this is mostly a guess based on what
+					// the disassembler produces.
+					uint32_t *reg_dst = &machine->regs[(hw2 >> 8) & 0b1111]; // Rd
+					uint32_t imm8 = (hw2 >> 0) & 0xff;
+					if (imm8 == 0x08) {
+						// MSP
+						// No MSP/PSP distinction implemented yet so assuming it
+						// equals the stack pointer.
+						*reg_dst = *sp;
+					} else {
+						*pc -= 2;
+						return ERR_UNDEFINED;
+					}
+				} else {
+					*pc -= 2;
+					return ERR_UNDEFINED;
+				}
+			} else if (machine_versioncheck(machine, CORTEX_M4)) {
+				uint32_t imm6 = hw1 & 0x3f;
+				uint32_t imm11 = hw2 & 0x7ff;
+				uint32_t s  = (hw1 >> 10) & 0b1;
+				uint32_t j1 = (hw2 >> 13) & 0b1;
+				uint32_t j2 = (hw2 >> 11) & 0b1;
+				int32_t pc_offset = (int32_t)((s << 20) | (j2 << 19) | (j1 << 18) | (imm6 << 12) | (imm11 << 1));
+				pc_offset <<= 11; // put in the top bits
+				pc_offset >>= 11; // sign-extend
+				uint32_t new_pc = (int32_t)*pc + pc_offset;
+				if (machine_condition(machine, cond)) {
+					*pc = new_pc;
+				}
 			}
 
 		} else if ((hw1 >> 9) == 0b1111100 && machine_versioncheck(machine, CORTEX_M4)) {
