@@ -101,7 +101,9 @@ func main() {
 
 	C.machine_reset(machine)
 	for {
-		C.machine_run(machine)
+		if C.machine_run(machine) == 0 {
+			return
+		}
 		C.terminal_disable_raw()
 
 		// send "machine has stopped"

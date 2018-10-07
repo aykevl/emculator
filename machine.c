@@ -1632,8 +1632,7 @@ int machine_run(machine_t *machine) {
 				// expected
 				break;
 			case ERR_EXIT:
-				machine_log(machine, LOG_ERROR, "exited.\n");
-				break;
+				return 0;
 			case ERR_BREAK:
 				machine_log(machine, LOG_ERROR, "\nhit breakpoint at address %x\n", machine->pc - 3);
 				break;
