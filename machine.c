@@ -523,7 +523,7 @@ int machine_step(machine_t *machine) {
 	if (*pc == 0xdeadbeef) {
 		return ERR_EXIT;
 	}
-	if (*pc > machine->image_size - 2) {
+	if (*pc > machine->image_size - 1) {
 		return ERR_PC;
 	}
 	if ((*pc & 1) != 1) {
