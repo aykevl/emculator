@@ -191,7 +191,6 @@ WASM_EXPORT
 void machine_reset(machine_t *machine) {
 	// Do a reset
 	machine->sp = machine->image32[0]; // initial stack pointer
-	//machine->lr = 0xffffffff; // exit address
 	machine->lr = 0xdeadbeef; // exit address
 	machine->pc = machine->image32[1]; // Reset_Vector address
 	machine->backtrace[1].pc = machine->pc - 1;
