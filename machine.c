@@ -3,6 +3,7 @@
 #include "terminal.h"
 
 #include <string.h>
+#include <stdio.h>
 
 // This file implements the CPU core and memory subsystem.
 // For more information on the instruction set, see:
@@ -10,32 +11,17 @@
 // http://hermes.wings.cs.wisc.edu/files/Thumb-2SupplementReferenceManual.pdf
 // https://www.heyrick.co.uk/armwiki/The_Status_register
 
-#ifdef __EMSCRIPTEN__
-
-#include <emscripten.h>
-
-// Implemented in JavaScript.
-void *wasm_malloc(size_t size);
-#define malloc wasm_malloc
-#define calloc(size, nmemb) wasm_malloc(size * nmemb)
-
-#define machine_versioncheck(machine, core) (false)
-#define machine_loglevel(machine) (0)
-#define machine_log(machine, level, ...) ((false) ? fprintf(stderr, __VA_ARGS__) : 0)
-
-#define KEEPALIVE EMSCRIPTEN_KEEPALIVE
-
-#else // all other compilers
-
-#include <stdio.h>
-
 // TODO: make this configurable
 #define machine_versioncheck(machine, core) (true)
 #define machine_loglevel(machine) (machine->loglevel)
 #define machine_log(machine, level, ...) ((machine->loglevel >= level) ? fprintf(stderr, __VA_ARGS__) : 0)
 
-#define KEEPALIVE
-
+#if defined(__wasm__)
+#define IS_WASM true
+#define WASM_EXPORT __attribute__((visibility("default")))
+#else
+#define IS_WASM false
+#define WASM_EXPORT
 #endif
 
 static int machine_transfer(machine_t *machine, uint32_t address, transfer_type_t transfer_type, uint32_t *reg, width_t width, bool signextend) {
@@ -93,9 +79,9 @@ static int machine_transfer(machine_t *machine, uint32_t address, transfer_type_
 			value = 1;
 		} else if (address == 0x40002124) { // ERROR
 		} else if (address == 0x40002144) { // RXTO
-		} else if (transfer_type == LOAD && address == 0x40002518) { // RXD
+		} else if (transfer_type == LOAD && address == 0x40002518 && !IS_WASM) { // RXD
 			value = terminal_getchar();
-		} else if (transfer_type == STORE && address == 0x4000251c) { // TXD
+		} else if (transfer_type == STORE && address == 0x4000251c && !IS_WASM) { // TXD
 			terminal_putchar(*reg);
 		} else if (transfer_type == LOAD && address == 0x4000d100) { // RNG.VALRDY
 			value = 1;
@@ -201,7 +187,7 @@ static int machine_transfer(machine_t *machine, uint32_t address, transfer_type_
 	return 0;
 }
 
-KEEPALIVE
+WASM_EXPORT
 void machine_reset(machine_t *machine) {
 	// Do a reset
 	machine->sp = machine->image32[0]; // initial stack pointer
@@ -1558,14 +1544,12 @@ void machine_print_registers(machine_t *machine) {
 	machine_log(machine, LOG_ERROR, "]\n");
 }
 
-KEEPALIVE
+WASM_EXPORT
 machine_t * machine_create(size_t image_size, size_t pagesize, size_t ram_size, int loglevel) {
 	if (image_size < 16 * 4) {
-#if !defined(__EMSCRIPTEN__)
 		if (loglevel >= LOG_ERROR) {
 			fprintf(stderr, "\nERROR: image is too small to contain an executable\n");
 		}
-#endif
 		return NULL;
 	}
 
@@ -1596,7 +1580,7 @@ void machine_load(machine_t *machine, uint8_t *image, size_t image_size) {
 	memcpy(machine->image8, image, image_size);
 }
 
-KEEPALIVE
+WASM_EXPORT
 uint8_t * machine_get_image(machine_t *machine) {
 	return machine->image8;
 }
@@ -1609,7 +1593,7 @@ void machine_free(machine_t *machine) {
 	free(machine);
 }
 
-KEEPALIVE
+WASM_EXPORT
 int machine_run(machine_t *machine) {
 	while (1) {
 		if (machine->halt) {
@@ -1692,7 +1676,7 @@ void machine_readregs(machine_t *machine, uint32_t *regs, size_t num) {
 	}
 }
 
-KEEPALIVE
+WASM_EXPORT
 uint32_t machine_readreg(machine_t *machine, size_t reg) {
 	if (reg >= sizeof(machine->regs) / sizeof(machine->regs[0])) {
 		return 0;
