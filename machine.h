@@ -140,7 +140,7 @@ enum {
 enum {
 	CORTEX_M0,
 	CORTEX_M4,
-} machine_core_t;
+};
 
 machine_t * machine_create(size_t image_size, size_t pagesize, size_t ram_size, int loglevel);
 void machine_load(machine_t *machine, uint8_t *image, size_t image_size);
