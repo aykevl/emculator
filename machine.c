@@ -7,7 +7,7 @@
 
 // This file implements the CPU core and memory subsystem.
 // For more information on the instruction set, see:
-// https://ece.uwaterloo.ca/~ece222/ARM/ARM7-TDMI-manual-pt3.pdf
+// https://www.dwedit.org/files/ARM7TDMI.pdf
 // http://hermes.wings.cs.wisc.edu/files/Thumb-2SupplementReferenceManual.pdf
 // https://www.heyrick.co.uk/armwiki/The_Status_register
 
@@ -381,6 +381,18 @@ static uint32_t machine_instr_sbc(machine_t *machine, uint32_t a, uint32_t b, bo
 	return result;
 }
 
+static uint32_t machine_instr_ror(machine_t *machine, uint32_t src, uint32_t rotate, bool setflags) {
+    uint32_t result = __builtin_rotateright32(src, rotate % 32);
+    if (setflags) {
+        machine->psr.n = (int32_t)result < 0;
+        machine->psr.z = result == 0;
+        if (rotate != 0) {
+            machine->psr.c = result >> 31; // last bit shifted out
+        }
+    }
+    return result;
+}
+
 // Return 1 if true, 0 if false, and -1 if invalid.
 static int machine_condition(machine_t *machine, uint32_t condition) {
 	if (condition == 0b0000) { // BEQ: Z == 1
@@ -641,6 +653,8 @@ int machine_step(machine_t *machine) {
 			*reg_dst = machine_instr_adc(machine, *reg_dst, *reg_src, setflags);
 		} else if (op == 0b0110) { // SBCS
 			*reg_dst = machine_instr_sbc(machine, *reg_dst, *reg_src, setflags);
+		} else if (op == 0b0111) { // RORS
+			*reg_dst = machine_instr_ror(machine, *reg_dst, *reg_src & 0xff, setflags);
 		} else if (op == 0b1000) { // TST
 			// set CC on Rd AND Rs
 			machine->psr.n = (int32_t)(*reg_src & *reg_dst) < 0;
@@ -669,8 +683,8 @@ int machine_step(machine_t *machine) {
 			// does not update C or V
 			*reg_dst = ~*reg_src;
 		} else {
-			// The only missing ALU op is ROR.
-			return ERR_UNDEFINED;
+			// All operations are implemented.
+			__builtin_trap();
 		}
 		if (setflags) {
 			machine->psr.n = (int32_t)*reg_dst < 0;
@@ -1405,9 +1419,7 @@ int machine_step(machine_t *machine) {
 				} else if (op == 0b10) {
 					*reg_dst = machine_instr_asr(machine, *reg_src, *reg_src2 & 0xff, flag_set);
 				} else {
-					// ROR
-					*pc -= 2; // undo 32-bit change
-					return ERR_UNDEFINED;
+					*reg_dst = machine_instr_ror(machine, *reg_src, *reg_src2 & 0xff, flag_set);
 				}
 				if (flag_set) {
 					machine->psr.n = (int32_t)*reg_dst < 0;
