@@ -519,6 +519,16 @@ static bool machine_is_32bit_instruction(uint16_t instruction) {
 	return ((instruction >> 11) == 0b11101 || (instruction >> 12) == 0b1111);
 }
 
+static int32_t machine_read_inst(machine_t *machine, uint32_t pc) {
+	if (pc < machine->image_size) {
+		return machine->image16[pc/2];
+	} else if (pc >= 0x20000000 && pc < 0x20000000+machine->mem_size) {
+		return machine->mem16[(pc-0x20000000)/2];
+	} else {
+		return -1;
+	}
+}
+
 int machine_step(machine_t *machine) {
 	// Some handy aliases
 	uint32_t *pc = &machine->pc; // r15
@@ -535,13 +545,15 @@ int machine_step(machine_t *machine) {
 	if (*pc == 0xdeadbeef) {
 		return ERR_EXIT;
 	}
-	if (*pc > machine->image_size - 1) {
+
+	int32_t inst = machine_read_inst(machine, *pc);
+	if (inst < 0) {
 		return ERR_PC;
 	}
+	uint16_t instruction = inst;
 	if ((*pc & 1) != 1) {
 		return ERR_PC;
 	}
-	uint16_t instruction = machine->image16[*pc/2];
 
 	// Increment PC to point to the next instruction.
 	*pc += 2;
@@ -984,8 +996,12 @@ int machine_step(machine_t *machine) {
 
 	} else if ((instruction >> 11) == 0b11101 && machine_versioncheck(machine, CORTEX_M4)) {
 		// 32-bit instruction
+		int32_t inst2 = machine_read_inst(machine, *pc);
+		if (inst2 < 0) {
+			return ERR_PC;
+		}
 		uint16_t hw1 = instruction;
-		uint16_t hw2 = machine->image16[*pc/2];
+		uint16_t hw2 = inst2;
 		*pc += 2;
 
 		if (((hw1 >> 6) == 0b1110100100)) {
@@ -1131,8 +1147,12 @@ int machine_step(machine_t *machine) {
 
 	} else if ((instruction >> 12) == 0b1111) {
 		// 32-bit instruction
+		int32_t inst2 = machine_read_inst(machine, *pc);
+		if (inst2 < 0) {
+			return ERR_PC;
+		}
 		uint16_t hw1 = instruction;
-		uint16_t hw2 = machine->image16[*pc/2];
+		uint16_t hw2 = inst2;
 		*pc += 2;
 
 		if ((hw1 >> 11) == 0b11110 && (hw2 >> 15) == 0b0 && machine_versioncheck(machine, CORTEX_M4)) {
@@ -1638,7 +1658,7 @@ int machine_run(machine_t *machine) {
 				machine_log(machine, LOG_ERROR, "\nERROR: invalid PC address: 0x%08x\n", machine->pc);
 				break;
 			case ERR_UNDEFINED:
-				machine_log(machine, LOG_ERROR, "\nERROR: unknown instruction %04x at address %x\n", machine->image16[machine->pc/2 - 1], machine->pc - 3);
+				machine_log(machine, LOG_ERROR, "\nERROR: unknown instruction %04x at address %x\n", machine_read_inst(machine, machine->pc-2), machine->pc - 3);
 				break;
 			default:
 				machine_log(machine, LOG_ERROR, "\nERROR: unknown error: %d\n", err);
