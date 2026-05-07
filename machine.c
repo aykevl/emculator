@@ -1616,6 +1616,11 @@ uint8_t * machine_get_image(machine_t *machine) {
 	return machine->image8;
 }
 
+WASM_EXPORT
+uint8_t * machine_get_mem(machine_t *machine) {
+	return machine->mem8;
+}
+
 void machine_free(machine_t *machine) {
 	free(machine->image);
 	machine->image = NULL;
